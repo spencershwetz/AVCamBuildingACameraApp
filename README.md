@@ -1,491 +1,294 @@
-# AVCam: Building a Camera App
-
+# AVCam: Building a camera app
 Capture photos and record video using the front and rear iPhone and iPad cameras.
 
 ## Overview
+The AVCam sample shows you how to build a basic camera app for iOS. It demonstrates how to use AVFoundation to access device cameras and microphones, configure a capture session, capture photos and videos, and much more. It also shows how to use the [PhotoKit](https://developer.apple.com/documentation/photokit) framework to save your captured media to the Photos library.
 
-The iOS Camera app allows you to capture photos and movies from both the front and rear cameras.
+The sample uses SwiftUI and the features of Swift concurrency to build a responsive camera app. The following diagram describes the app’s design:
 
-This sample code project, AVCam, shows you how to implement these capture features in your own camera app. It leverages basic functionality of the built-in front and rear iPhone and iPad cameras.
+![A diagram that describes the relationships between app objects. When the app starts, it creates an instance of CameraModel. The camera model creates instances of the CaptureService and MediaLibrary types, which it uses to perform its essential functions. Finally, the app creates an instance of CameraView, which provides the main user interface, and passes it a reference to the CameraModel object.](Documentation/app-assembly-overview.png)
 
-- Note: To use AVCam, you need an iOS device running iOS 17 or later. Because Xcode doesn’t have access to the device camera, this sample won't work in Simulator.
+The key type the app defines is `CaptureService`, an actor that manages the interactions with the AVFoundation capture APIs. This object configures the capture pipeline and manages its life cycle, and defines an asynchronous interface to capture photos and videos. It delegates the handling of those operations to the app’s `PhotoCapture` and `MovieCapture` objects, respectively.
 
+- Note: Configuring and starting a capture session are blocking operations that can take time to complete. To keep the user interface responsive, the app defines `CaptureService` as an actor type to ensure that AVFoundation capture API calls don’t occur on the main thread.
 
-## Configure a Capture Session
+## Configure the sample code project
+Because Simulator doesn't have access to device cameras, it isn't suitable for running the app—you'll need to run it on a device. To run this sample, you'll need the following:
+* An iOS device with iOS 18 or later
 
-[`AVCaptureSession`][1] accepts input data from capture devices like the camera and microphone. After receiving the input, `AVCaptureSession` marshals that data to appropriate outputs for processing, eventually resulting in a movie file or still photo. After configuring the capture session's inputs and outputs, you tell it to start—and later stop—capture.
+## Configure a capture session
+The central object in any capture app is an instance of [AVCaptureSession](https://developer.apple.com/documentation/avfoundation/avcapturesession). A capture session is the central hub to which the app connects inputs from camera and microphone devices, and attaches them to outputs that capture media like photos and video. After configuring the session, the app uses it to control the flow of data through the capture pipeline.
 
-``` swift
-private let session = AVCaptureSession()
+![A diagram that describes the configuration of a capture session. It shows how a capture session connects inputs from camera and microphone devices to compatible outputs that capture photos or video, or display a video preview.](Documentation/avcapturesession-overview.png)
+
+The capture service performs the session configuration in its `setUpSession()` method.
+It retrieves the default camera and microphone for the host device and adds them as inputs to the capture session.
+
+```swift
+// Retrieve the default camera and microphone.
+let defaultCamera = try deviceLookup.defaultCamera
+let defaultMic = try deviceLookup.defaultMic
+
+// Add inputs for the default camera and microphone devices.
+activeVideoInput = try addInput(for: defaultCamera)
+try addInput(for: defaultMic)
 ```
 
-AVCam selects the rear camera by default and configures a camera capture session to stream content to a video preview view. `PreviewView` is a custom [`UIView`][2] subclass backed by an [`AVCaptureVideoPreviewLayer`][3]. AVFoundation doesn't have a `PreviewView` class, but the sample code creates one to facilitate session management.
+To add the inputs, it uses a helper method that creates a new [AVCaptureDeviceInput](https://developer.apple.com/documentation/avfoundation/avcapturedeviceinput) for the specified camera or microphone device and adds it to the capture session, if possible.
 
-The following diagram shows how the session manages input devices and capture output:
-
-![A diagram of the AVCam app's architecture, including input devices and capture output in relation to the main capture session.][image-1]
-
-Delegate any interaction with the `AVCaptureSession`—including its inputs and outputs—to a dedicated serial dispatch queue (`sessionQueue`), so that the interaction doesn't block the main queue. Perform any configuration involving changes to a session's topology or disruptions to its running video stream on a separate dispatch queue, because session configuration always blocks execution of other tasks until the queue processes the change. Similarly, the sample code dispatches other tasks—such as resuming an interrupted session, toggling capture modes, switching cameras, and writing media to a file—to the session queue, so that their processing doesn’t block or delay user interaction with the app.
-
-In contrast, the code dispatches tasks that affect the UI (such as updating the preview view) to the main queue, because `AVCaptureVideoPreviewLayer`, a subclass of [`CALayer`][4], is the backing layer for the sample’s preview view. You must manipulate `UIView` subclasses on the main thread for them to show up in a timely, interactive fashion.
-
-In `viewDidLoad`, AVCam creates a session and assigns it to the preview view:
-
-``` swift
-previewView.session = session
-```
-
-For more information about configuring image capture sessions, see [Setting Up a Capture Session][5].
-
-## Request Authorization for Access to Input Devices
-
-Once you configure the session, it is ready to accept input. Each [`AVCaptureDevice`][6]—whether a camera or a mic—requires the user to authorize access. AVFoundation enumerates the authorization state using [`AVAuthorizationStatus`][7], which informs the app whether the user has restricted or denied access to a capture device.
-
-For more information about preparing your app's `Info.plist` for custom authorization requests, see [Requesting Authorization for Media Capture][8].
-
-
-## Switch Between the Rear- and Front-Facing Cameras
-
-The `changeCamera` method handles switching between cameras when the user taps a button in the UI. It uses a discovery session, which lists available device types in order of preference, and accepts the first device in its `devices` array. For example, the `videoDeviceDiscoverySession` in AVCam queries the device on which the app is running for available input devices. Furthermore, if a user's device has a broken camera, it won't be available in the `devices` array.
-
-``` swift
-switch currentPosition {
-case .unspecified, .front:
-    newVideoDevice = backVideoDeviceDiscoverySession.devices.first
-    
-case .back:
-    if let externalCamera = externalVideoDeviceDiscoverySession.devices.first {
-        newVideoDevice = externalCamera
+```swift
+// Adds an input to the capture session to connect the specified capture device.
+@discardableResult
+private func addInput(for device: AVCaptureDevice) throws -> AVCaptureDeviceInput {
+    let input = try AVCaptureDeviceInput(device: device)
+    if captureSession.canAddInput(input) {
+        captureSession.addInput(input)
     } else {
-        newVideoDevice = frontVideoDeviceDiscoverySession.devices.first
+        throw CameraError.addInputFailed
     }
-    
-@unknown default:
-    print("Unknown capture position. Defaulting to back, dual-camera.")
-    newVideoDevice = AVCaptureDevice.default(.builtInDualCamera, for: .video, position: .back)
+    return input
 }
 ```
 
-If the discovery session finds a camera in the proper position, it removes the previous input from the capture session and adds the new camera as an input.
+After adding the device inputs, the method configures the capture session for the app’s default photo capture mode. It optimizes the pipeline for high-resolution photo quality output by setting the capture session’s [.photo](https://developer.apple.com/documentation/avfoundation/avcapturesession/preset/1390112-photo) preset. Finally, to enable the app to capture photos, it adds an [AVCapturePhotoOutput](https://developer.apple.com/documentation/avfoundation/avcapturephotooutput) instance to the session.
 
-``` swift
-self.session.removeInput(self.videoDeviceInput)
+```swift
+// Configure the session for photo capture by default.
+captureSession.sessionPreset = .photo
 
-if self.session.canAddInput(videoDeviceInput) {
-    NotificationCenter.default.removeObserver(self, name: .AVCaptureDeviceSubjectAreaDidChange, object: currentVideoDevice)
-    NotificationCenter.default.addObserver(self, selector: #selector(self.subjectAreaDidChange), name: .AVCaptureDeviceSubjectAreaDidChange, object: videoDeviceInput.device)
-    
-    self.session.addInput(videoDeviceInput)
-    self.videoDeviceInput = videoDeviceInput
-    
-    if isUserSelection {
-        AVCaptureDevice.userPreferredCamera = videoDevice
-    }
-    
-    DispatchQueue.main.async {
-        self.createDeviceRotationCoordinator()
-    }
+// Add the photo capture output as the default output type.
+if captureSession.canAddOutput(photoCapture.output) {
+    captureSession.addOutput(photoCapture.output)
 } else {
-    self.session.addInput(self.videoDeviceInput)
+    throw CameraError.addOutputFailed
 }
 ```
-[View in Source][9]
 
-## Handle Interruptions and Errors
 
-Interruptions such as phone calls, notifications from other apps, and music playback may occur during a capture session. Handle these interruptions by adding observers to listen for [`AVCaptureSessionWasInterruptedNotification`][10]:
+## Set up a capture preview
+To preview the content a camera is capturing, AVFoundation provides a Core Animation layer subclass called  [AVCaptureVideoPreviewLayer](https://developer.apple.com/documentation/avfoundation/avcapturevideopreviewlayer). SwiftUI doesn’t support using layers directly, so instead, the app hosts this layer in a [UIView](https://developer.apple.com/documentation/uikit/uiview) subclass called `PreviewView`. It overrides the [layerClass](https://developer.apple.com/documentation/uikit/uiview/1622626-layerclass ) property to make the preview layer the backing for the view.
 
-``` swift
-NotificationCenter.default.addObserver(self,
-                                       selector: #selector(sessionWasInterrupted),
-                                       name: .AVCaptureSessionWasInterrupted,
-                                       object: session)
-NotificationCenter.default.addObserver(self,
-                                       selector: #selector(sessionInterruptionEnded),
-                                       name: .AVCaptureSessionInterruptionEnded,
-                                       object: session)
-```
-[View in Source][11]
-
-When AVCam receives an interruption notification, it can pause or suspend the session with an option to resume activity when the interruption ends. AVCam registers `sessionWasInterrupted` as a handler for receiving notifications, to inform the user when there's an interruption to the capture session:
-
-``` swift
-if reason == .audioDeviceInUseByAnotherClient || reason == .videoDeviceInUseByAnotherClient {
-    showResumeButton = true
-} else if reason == .videoDeviceNotAvailableWithMultipleForegroundApps {
-    // Fade-in a label to inform the user that the camera is
-    // unavailable.
-    cameraUnavailableLabel.alpha = 0
-    cameraUnavailableLabel.isHidden = false
-    UIView.animate(withDuration: 0.25) {
-        self.cameraUnavailableLabel.alpha = 1
+```swift
+class PreviewView: UIView, PreviewTarget {
+    
+    // Use `AVCaptureVideoPreviewLayer` as the view's backing layer.
+    override class var layerClass: AnyClass {
+        AVCaptureVideoPreviewLayer.self
     }
-} else if reason == .videoDeviceNotAvailableDueToSystemPressure {
-    print("Session stopped running due to shutdown system pressure level.")
+    
+    var previewLayer: AVCaptureVideoPreviewLayer {
+        layer as! AVCaptureVideoPreviewLayer
+    }
+    
+    func setSession(_ session: AVCaptureSession) {
+        // Connects the session with the preview layer, which allows the layer
+        // to provide a live view of the captured content.
+        previewLayer.session = session
+    }
 }
 ```
-[View in Source][12]
 
-The camera view controller observes [`AVCaptureSessionRuntimeError`][13] to receive a notification when an error occurs:
+To make this view accessible to SwiftUI, the app wraps it as a [UIViewRepresentable](https://developer.apple.com/documentation/swiftui/uiviewrepresentable) type called `CameraPreview`.
 
-``` swift
-NotificationCenter.default.addObserver(self,
-                                       selector: #selector(sessionRuntimeError),
-                                       name: .AVCaptureSessionRuntimeError,
-                                       object: session)
+```swift
+struct CameraPreview: UIViewRepresentable {
+    
+    private let source: PreviewSource
+    
+    init(source: PreviewSource) {
+        self.source = source
+    }
+    
+    func makeUIView(context: Context) -> PreviewView {
+        let preview = PreviewView()
+        // Connect the preview layer to the capture session.
+        source.connect(to: preview)
+        return preview
+    }
+    
+    func updateUIView(_ previewView: PreviewView, context: Context) {
+        // No implementation needed.
+    }
+}
 ```
 
-When a runtime error occurs, restart the capture session:
+To connect the preview to the capture session without directly exposing the capture service’s protected state, the sample defines app-specific `PreviewSource` and `PreviewTarget` protocols. The app passes the `CameraPreview` a preview source, which provides a reference to the capture session. Calling the preview source’s `connect(to:)` method sets the capture session on the `PreviewView` instance.
 
-``` swift
-// If media services were reset, and the last start succeeded, restart
-// the session.
-if error.code == .mediaServicesWereReset {
-    sessionQueue.async {
-        if self.isSessionRunning {
-            self.session.startRunning()
-            self.isSessionRunning = self.session.isRunning
-        } else {
-            DispatchQueue.main.async {
-                self.resumeButton.isHidden = false
-            }
+## Request authorization
+The initial capture configuration is complete, but before the app can successfully start the capture session, it needs to determine whether it has authorization to use device inputs. The system requires that a person explicitly authorize the app to capture input from cameras and microphones. To determine the app’s status, the capture service defines an asynchronous `isAuthorized` property as follows:
+
+```swift
+var isAuthorized: Bool {
+    get async {
+        let status = AVCaptureDevice.authorizationStatus(for: .video)
+        // Determine whether a person previously authorized camera access.
+        var isAuthorized = status == .authorized
+        // If the system hasn't determined their authorization status,
+        // explicitly prompt them for approval.
+        if status == .notDetermined {
+            isAuthorized = await AVCaptureDevice.requestAccess(for: .video)
         }
+        return isAuthorized
     }
-} else {
-    resumeButton.isHidden = false
-}
-```
-[View in Source][14]
-
-## Capture a Photo
-
-Taking a photo happens on the session queue. The process begins by updating the [`AVCapturePhotoOutput`][15] connection to match the video orientation of the video preview layer. This enables the camera to accurately capture what the user sees onscreen:
-
-``` swift
-if let photoOutputConnection = self.photoOutput.connection(with: .video) {
-    photoOutputConnection.videoRotationAngle = videoRotationAngle
 }
 ```
 
-After aligning the outputs, AVCam proceeds to create [`AVCapturePhotoSettings`][16] to configure capture parameters such as focus, flash, and resolution:
+The property’s implementation uses the methods of [AVCaptureDevice](https://developer.apple.com/documentation/avfoundation/avcapturedevice) to check the current status, and if the app hasn’t made a determination, requests authorization from the user. If the app has authorization, it starts the capture session to begin the flow of data. If not, it shows an error message in the user interface.
 
-``` swift
-var photoSettings = AVCapturePhotoSettings()
+To learn more about the configuration required to access cameras and microphones, see [Requesting authorization to capture and save media](https://developer.apple.com/documentation/avfoundation/capture_setup/requesting_authorization_to_capture_and_save_media).
 
-// Capture HEIF photos when supported.
-if self.photoOutput.availablePhotoCodecTypes.contains(AVVideoCodecType.hevc) {
-    photoSettings = AVCapturePhotoSettings(format: [AVVideoCodecKey: AVVideoCodecType.hevc])
-} else {
-    photoSettings = AVCapturePhotoSettings()
-}
 
-// Set the flash to auto mode.
-if self.videoDeviceInput.device.isFlashAvailable {
-    photoSettings.flashMode = .auto
-}
+## Change the capture mode
+The app starts in photo capture mode. Changing modes requires a reconfiguration of the capture session as follows:
 
-// Enable high-resolution photos.
-photoSettings.maxPhotoDimensions = self.photoOutput.maxPhotoDimensions
-if !photoSettings.availablePreviewPhotoPixelFormatTypes.isEmpty {
-    photoSettings.previewPhotoFormat = [kCVPixelBufferPixelFormatTypeKey as String: photoSettings.__availablePreviewPhotoPixelFormatTypes.first!]
+```swift
+func setCaptureMode(_ captureMode: CaptureMode) throws {
+    
+    self.captureMode = captureMode
+    
+    // Change the configuration atomically.
+    captureSession.beginConfiguration()
+    defer { captureSession.commitConfiguration() }
+    
+    // Configure the capture session for the selected capture mode.
+    switch captureMode {
+    case .photo:
+        // The app needs to remove the movie capture output to perform Live Photo capture.
+        captureSession.sessionPreset = .photo
+        captureSession.removeOutput(movieCapture.output)
+    case .video:
+        captureSession.sessionPreset = .high
+        try addOutput(movieCapture.output)
+    }
+
+    // Update the advertised capabilities after reconfiguration.
+    updateCaptureCapabilities()
 }
-if self.livePhotoMode == .on && self.photoOutput.isLivePhotoCaptureSupported { // Live Photo Capture is not supported in movie mode.
-    photoSettings.livePhotoMovieFileURL = livePhotoMovieUniqueTemporaryDirectoryFileURL()
-}
-photoSettings.photoQualityPrioritization = self.photoQualityPrioritizationMode
 ```
 
-The sample uses a separate object, the `PhotoCaptureProcessor`, for the photo capture delegate to isolate each capture life cycle. This clear separation of capture cycles is necessary for Live Photos, where a single capture cycle may involve the capture of several frames.
+In photo capture mode, the app sets the [.photo](https://developer.apple.com/documentation/avfoundation/avcapturesession/preset/1390112-photo) preset on the capture session, which optimizes the capture pipeline for high-quality photo output. It also removes the movie capture output, which prevents the photo output from performing Live Photo capture. In video capture mode, it sets the session preset to [.high](https://developer.apple.com/documentation/avfoundation/avcapturesession/preset/1388084-high) and adds the movie file capture output to the session.
 
-Each time the user presses the central shutter button, AVCam captures a photo with the previously configured settings by calling [`capturePhotoWithSettings`][17]:
+## Select a new camera
+The app provides a button that lets people switch between the front and back cameras and, in iPadOS, connected external cameras. To change the active camera, the app reconfigures the session as follows:
 
-``` swift
-self.photoOutput.capturePhoto(with: photoSettings, delegate: photoCaptureProcessor)
-
-// Stop tracking the capture request because it's now destined for
-// the photo output.
-self.photoOutputReadinessCoordinator.stopTrackingCaptureRequest(using: photoSettings.uniqueID)
+```swift
+// Changes the device the service uses for video capture.
+private func changeCaptureDevice(to device: AVCaptureDevice) {
+    // The service must have a valid video input prior to calling this method.
+    guard let currentInput = activeVideoInput else { fatalError() }
+    
+    // Bracket the following configuration in a begin/commit configuration pair.
+    captureSession.beginConfiguration()
+    defer { captureSession.commitConfiguration() }
+    
+    // Remove the existing video input before attempting to connect a new one.
+    captureSession.removeInput(currentInput)
+    do {
+        // Attempt to connect a new input and device to the capture session.
+        activeVideoInput = try addInput(for: device)
+        // Configure a new rotation coordinator for the new device.
+        createRotationCoordinator(for: device)
+        // Register for device observations.
+        observeSubjectAreaChanges(of: device)
+        // Update the service's advertised capabilities.
+        updateCaptureCapabilities()
+    } catch {
+        // Reconnect the existing camera on failure.
+        captureSession.addInput(currentInput)
+    }
+}
 ```
-[View in Source][18]
 
-The `capturePhoto` method accepts two parameters:
+[AVCaptureSession](https://developer.apple.com/documentation/avfoundation/avcapturesession) only allows attaching a single camera input at a time, so this method begins by removing the existing camera’s input. It then attempts to add an input for the new device and, if successful, performs some internal configuration to reflect the device change. If the capture session can’t add the new device, it reconnects the removed input.
 
-* An `AVCapturePhotoSettings` object that encapsulates the settings your user configures through the app, such as exposure, flash, focus, and torch.
+- Note: If your app requires capturing from multiple cameras simultaneously, use [AVCaptureMultiCamSession](https://developer.apple.com/documentation/avfoundation/avcapturemulticamsession) instead.
 
-* A delegate that conforms to the [`AVCapturePhotoCaptureDelegate`][19] protocol, to respond to subsequent callbacks that the system delivers during photo capture.
+## Capture a photo
+The capture service delegates handling of the app’s photo capture features to the `PhotoCapture` object, which manages the life cycle of and interaction with an [AVCapturePhotoOutput](https://developer.apple.com/documentation/avfoundation/avcapturephotooutput). The app captures photos with this object by calling its [capturePhoto(with:delegate:)](https://developer.apple.com/documentation/avfoundation/avcapturephotooutput/1648765-capturephoto) method, passing it an object that describes photo capture settings to enable and a delegate for the system to call as capture proceeds. To use this delegate-based API in an `async` context , the app wraps this call with a checked throwing continuation as follows:
 
-Once the app calls [`capturePhoto`][20], the process for starting photography is over. From that point forward, operations on that individual photo capture happens in delegate callbacks.
+```swift
+/// The app calls this method when the user taps the photo capture button.
+func capturePhoto(with features: EnabledPhotoFeatures) async throws -> Photo {
+    // Wrap the delegate-based capture API in a continuation to use it in an async context.
+    try await withCheckedThrowingContinuation { continuation in
+        
+        // Create a settings object to configure the photo capture.
+        let photoSettings = createPhotoSettings(with: features)
+        
+        let delegate = PhotoCaptureDelegate(continuation: continuation)
+        monitorProgress(of: delegate)
+        
+        // Capture a new photo with the specified settings.
+        photoOutput.capturePhoto(with: photoSettings, delegate: delegate)
+    }
+}
+```
 
-## Track Results Through a Photo Capture Delegate
+When the system finishes capturing a photo, it calls the delegate’s [photoOutput(_:didFinishCaptureFor:error:)](https://developer.apple.com/documentation/avfoundation/avcapturephotocapturedelegate/1778618-photooutput) method. The delegate object’s implementation of this method uses the continuation to resume execution by returning a photo or throwing an error.
 
-The  method `capturePhoto` only begins the process of taking a photo. The rest of the process happens in delegate methods that the app implements.
+```swift
+func photoOutput(_ output: AVCapturePhotoOutput, didFinishCaptureFor resolvedSettings: AVCaptureResolvedPhotoSettings, error: Error?) {
 
-![A timeline of delegate callbacks for still photo capture.][image-2]
+    // If an error occurs, resume the continuation by throwing an error, and return.
+    if let error {
+        continuation.resume(throwing: error)
+        return
+    }
+    
+    /// Create a photo object to save to the `MediaLibrary`.
+    let photo = Photo(data: photoData, isProxy: isProxyPhoto, livePhotoMovieURL: livePhotoMovieURL)
+    // Resume the continuation by returning the captured photo.
+    continuation.resume(returning: photo)
+}
+```
 
-- [`photoOutput(_:willBeginCaptureFor:)`][21] arrives first, as soon as you call `capturePhoto`. The resolved settings represent the actual settings that the camera will apply for the upcoming photo. AVCam uses this method only for behavior specific to Live Photos. AVCam tries to tell if the photo is a Live Photo by checking its [`livePhotoMovieDimensions`][22] size; if the photo is a Live Photo, AVCam increments a count to track Live Photos in progress:
+To learn more about capturing photos with AVFoundation, see [Capturing Still and Live Photos](https://developer.apple.com/documentation/avfoundation/photo_capture/capturing_still_and_live_photos).
 
-``` swift
-self.sessionQueue.async {
-    if capturing {
-        self.inProgressLivePhotoCapturesCount += 1
+## Record a movie
+The capture service delegates handling of the app’s video capture features to the `MovieCapture` object, which manages the life cycle of and interaction with an [AVCaptureMovieFileOutput](https://developer.apple.com/documentation/avfoundation/avcapturemoviefileoutput). To start recording a movie, the app calls the movie file output’s [startRecording(to:recordingDelegate:)](https://developer.apple.com/documentation/avfoundation/avcapturefileoutput/1387224-startrecording) method, which takes a URL to write the move to and a delegate for the system to call when recording completes.
+
+```swift
+/// Starts movie recording.
+func startRecording() {
+    // Return early if already recording.
+    guard !movieOutput.isRecording else { return }
+
+    // Start a timer to update the recording time.
+    startMonitoringDuration()
+    
+    delegate = MovieCaptureDelegate()
+    movieOutput.startRecording(to: URL.movieFileURL, recordingDelegate: delegate!)
+}
+```
+
+To finish recording the video, the app calls the movie file output’s [stopRecording()](https://developer.apple.com/documentation/avfoundation/avcapturefileoutput/1389485-stoprecording) method, which causes the system to call the delegate to handle the captured output. To adapt this delegate-based callback, the app wraps this interaction in a checked throwing continuation as follows:
+
+```swift
+/// Stops movie recording.
+/// - Returns: A `Movie` object that represents the captured movie.
+func stopRecording() async throws -> Movie {
+    // Use a continuation to adapt the delegate-based capture API to an async interface.
+    return try await withCheckedThrowingContinuation { continuation in
+        // Set the continuation on the delegate to handle the capture result.
+        delegate?.continuation = continuation
+        
+        /// Stops recording, which causes the output to call the `MovieCaptureDelegate` object.
+        movieOutput.stopRecording()
+        stopMonitoringDuration()
+    }
+}
+```
+
+When the app calls the movie file output’s [stopRecording()](https://developer.apple.com/documentation/avfoundation/avcapturefileoutput/1389485-stoprecording) method, the system calls the delegate, which resumes execution either by returning a movie or throwing an error.
+
+```swift
+func fileOutput(_ output: AVCaptureFileOutput, didFinishRecordingTo outputFileURL: URL, from connections: [AVCaptureConnection], error: Error?) {
+    if let error {
+        // If an error occurs, throw it to the caller.
+        continuation?.resume(throwing: error)
     } else {
-        self.inProgressLivePhotoCapturesCount -= 1
-    }
-    
-    let inProgressLivePhotoCapturesCount = self.inProgressLivePhotoCapturesCount
-    DispatchQueue.main.async {
-        if inProgressLivePhotoCapturesCount > 0 {
-            self.capturingLivePhotoLabel.isHidden = false
-        } else if inProgressLivePhotoCapturesCount == 0 {
-            self.capturingLivePhotoLabel.isHidden = true
-        } else {
-            print("Error: In progress Live Photo capture count is less than 0.")
-        }
+        // Return a new movie object.
+        continuation?.resume(returning: Movie(url: outputFileURL))
     }
 }
 ```
-[View in Source][23]
-
-- [`photoOutput(_:willCapturePhotoFor:)`][24] arrives right after the system plays the shutter sound. AVCam uses this opportunity to flash the screen, alerting to the user that the camera captured a photo. The sample code implements this flash by animating the preview view layer's `opacity` from `0` to `1`.
-
-``` swift
-// Flash the screen to signal that AVCam took a photo.
-DispatchQueue.main.async {
-    self.previewView.videoPreviewLayer.opacity = 0
-    UIView.animate(withDuration: 0.25) {
-        self.previewView.videoPreviewLayer.opacity = 1
-    }
-}
-```
-[View in Source][25]
-
-- [`photoOutput(_:didFinishCaptureFor:error:)`][26] is the final callback, marking the end of capture for a single photo. AVCam cleans up its delegate and settings so they don't remain for subsequent photo captures:
-
-``` swift
-self.sessionQueue.async {
-    self.inProgressPhotoCaptureDelegates[photoCaptureProcessor.requestedPhotoSettings.uniqueID] = nil
-}
-```
-[View in Source][27]
-
-You can apply other visual effects in this delegate method, such as animating a preview thumbnail of the captured photo.
-
-For more information about tracking photo progress through delegate callbacks, see [`Tracking Photo Capture Progress`][28].
-
-## Capture Live Photos
-
-When you enable capture of Live Photos, the camera takes one still image and a short movie around the moment of capture. The app triggers Live Photo capture the same way as still photo capture: through a single call to `capturePhotoWithSettings`, where you pass the URL for the Live Photos short video through the [`livePhotoMovieFileURL`][29] property. You can enable Live Photos at the `AVCapturePhotoOutput` level, or you can configure Live Photos at the `AVCapturePhotoSettings` level on a per-capture basis.
-
-Because Live Photo capture creates a short movie file, AVCam must express where to save the movie file as a URL. Also, because Live Photo captures can overlap, the code must keep track of the number of in-progress Live Photo captures to ensure that the Live Photo label stays visible during these captures. The `photoOutput(_:willBeginCaptureFor:)` delegate method in the previous section implements this tracking counter.
-
-![A timeline of delegate callbacks for Live Photo capture.][image-3]
-
-- [`photoOutput(_:didFinishRecordingLivePhotoMovieForEventualFileAt:resolvedSettings:)`][30] fires when recording of the short movie ends. AVCam dismisses the Live badge here. Because the camera has finished recording the short movie, AVCam executes the Live Photo handler decrementing the completion counter:
-
-``` swift
-livePhotoCaptureHandler(false)
-```
-[View in Source][31]
-
-- [`photoOutput(_:didFinishProcessingLivePhotoToMovieFileAt:duration:photoDisplayTime:resolvedSettings:error:)`][32] fires last, indicating that the movie is fully written to disk and is ready for consumption. AVCam uses this opportunity to display any capture errors and redirect the saved file URL to its final output location:
-
-``` swift
-if error != nil {
-    print("Error processing Live Photo companion movie: \(String(describing: error))")
-    return
-}
-livePhotoCompanionMovieURL = outputFileURL
-```
-[View in Source][33]
-
-For more information about incorporating Live Photo capture into your app, see [Capturing Still and Live Photos][34].
-
-## Save Photos to the User’s Photo Library
-
-Before you can save an image or movie to the user's photo library, you must first request access to that library. The process for requesting write authorization mirrors capture device authorization: show an alert with text that you provide in the `Info.plist`.
-
-AVCam checks for authorization in the ['captureOutput:didFinishRecordingToOutputFileAtURL:fromConnections'][35] callback method, which is where the `AVCaptureOutput` provides media data to save as output.
-
-```
-PHPhotoLibrary.requestAuthorization { status in
-```
-
-For more information about requesting access to the user's photo library, see [Delivering a Great Privacy Experience in Your Photos App][36].
-
-## Record Movie Files
-
-AVCam supports video capture by querying and adding input devices with the `.video` qualifier. The app defaults to the rear dual camera, but, if the device doesn't have a dual camera, the app defaults to the wide-angle camera.
-
-``` swift
-var defaultVideoDevice: AVCaptureDevice? = AVCaptureDevice.systemPreferredCamera
-
-let userDefaults = UserDefaults.standard
-if !userDefaults.bool(forKey: "setInitialUserPreferredCamera") || defaultVideoDevice == nil {
-    let backVideoDeviceDiscoverySession = AVCaptureDevice.DiscoverySession(deviceTypes: [.builtInDualCamera, .builtInWideAngleCamera],
-                                                                           mediaType: .video, position: .back)
-    
-    defaultVideoDevice = backVideoDeviceDiscoverySession.devices.first
-    
-    AVCaptureDevice.userPreferredCamera = defaultVideoDevice
-    
-    userDefaults.set(true, forKey: "setInitialUserPreferredCamera")
-}
-```
-
-Instead of passing settings to the system as with still photography, pass an output URL like in Live Photos. The delegate callbacks provide the same URL, so your app doesn’t need to store it in an intermediate variable.
-
-Once the user taps Record to begin capture, AVCam calls [`startRecording`][37]:
-
-``` swift
-movieFileOutput.startRecording(to: URL(fileURLWithPath: outputFilePath), recordingDelegate: self)
-```
-
-Just like `capturePhoto` triggered delegate callbacks for still capture, `startRecording` triggers a series of delegate callbacks for movie recording.
-
-![A timeline of delegate callbacks for movie recording.][image-4]
-
-Track the progress of the movie recording through the delegate callback chain. Instead of implementing `AVCapturePhotoCaptureDelegate`, implement [`AVCaptureFileOutputRecordingDelegate`][38]. Because the movie-recording delegate callbacks require interaction with the capture session, AVCam makes `CameraViewController` the delegate instead of creating a separate delegate object.
-
-- [`fileOutput(_:didStartRecordingTo:from:)`][39] fires when the file output starts writing data to a file. AVCam uses this opportunity to change the Record button to a Stop button:
-
-``` swift
-DispatchQueue.main.async {
-    self.recordButton.isEnabled = true
-    self.recordButton.setImage(#imageLiteral(resourceName: "CaptureStop"), for: [])
-}
-```
-[View in Source][40]
-
-- [`fileOutput(_:didFinishRecordingTo:from:error:)`][41] fires last, indicating that the movie is fully written to disk and is ready for consumption. AVCam takes this chance to move the temporarily saved movie from the given URL to the user’s photo library or the app’s documents folder:
-
-``` swift
-              PHPhotoLibrary.shared().performChanges({
-                  let options = PHAssetResourceCreationOptions()
-                  options.shouldMoveFile = true
-                  let creationRequest = PHAssetCreationRequest.forAsset()
-                  creationRequest.addResource(with: .video, fileURL: outputFileURL, options: options)
-
-// Specify the movie's location.
-creationRequest.location = self.locationManager.location
-              }, completionHandler: { success, error in
-                  if !success {
-                      print("AVCam couldn't save the movie to your photo library: \(String(describing: error))")
-                  }
-                  cleanup()
-              })
-```
-[View in Source][42]
-
-In the event that AVCam goes into the background—such as when the user accepts an incoming phone call—the app must ask permission from the user to continue recording. AVCam requests time from the system to perform this saving through a background task. This background task ensures that there is enough time to write the file to the photo library, even when AVCam recedes to the background. To conclude background execution, AVCam calls [`endBackgroundTask`][43] in  [`didFinishRecordingTo`][44] after saving the recorded file.
-
-``` swift
-self.backgroundRecordingID = UIApplication.shared.beginBackgroundTask(expirationHandler: nil)
-```
-
-## Take Photos While Recording a Movie
-
-Like the iOS Camera app, AVCam can take photos while also capturing a movie. AVCam captures such photos at the same resolution as the video.
-
-``` swift
-let movieFileOutput = AVCaptureMovieFileOutput()
-
-if self.session.canAddOutput(movieFileOutput) {
-    self.session.beginConfiguration()
-    self.session.addOutput(movieFileOutput)
-    self.session.sessionPreset = .high
-    
-    self.selectedMovieMode10BitDeviceFormat = self.tenBitVariantOfFormat(activeFormat: self.videoDeviceInput.device.activeFormat)
-    
-    if self.selectedMovieMode10BitDeviceFormat != nil {
-        DispatchQueue.main.async {
-            self.HDRVideoModeButton.isHidden = false
-            self.HDRVideoModeButton.isEnabled = true
-        }
-        
-        if self.HDRVideoMode == .on {
-            do {
-                try self.videoDeviceInput.device.lockForConfiguration()
-                self.videoDeviceInput.device.activeFormat = self.selectedMovieMode10BitDeviceFormat!
-                print("Setting 'x420' format \(String(describing: self.selectedMovieMode10BitDeviceFormat)) for video recording")
-                self.videoDeviceInput.device.unlockForConfiguration()
-            } catch {
-                print("Could not lock device for configuration: \(error)")
-            }
-        }
-    }
-    
-    if let connection = movieFileOutput.connection(with: .video) {
-        if connection.isVideoStabilizationSupported {
-            connection.preferredVideoStabilizationMode = .auto
-        }
-    }
-    self.session.commitConfiguration()
-    
-    DispatchQueue.main.async {
-        captureModeControl.isEnabled = true
-    }
-    
-    self.movieFileOutput = movieFileOutput
-    
-    DispatchQueue.main.async {
-        self.recordButton.isEnabled = true
-        
-        // For photo captures during movie recording, Balanced
-        // quality photo processing is prioritized to get high
-        // quality stills and avoid frame drops during
-        // recording.
-        self.photoQualityPrioritizationSegControl.selectedSegmentIndex = 1
-        self.photoQualityPrioritizationSegControl.sendActions(for: UIControl.Event.valueChanged)
-    }
-}
-```
-
-[1]:	https://developer.apple.com/documentation/avfoundation/avcapturesession
-[2]:	https://developer.apple.com/documentation/uikit/uiview
-[3]:	https://developer.apple.com/documentation/avfoundation/avcapturevideopreviewlayer
-[4]:	https://developer.apple.com/documentation/quartzcore/calayer
-[5]:	https://developer.apple.com/documentation/avfoundation/capture_setup/setting_up_a_capture_session
-[6]:	https://developer.apple.com/documentation/avfoundation/avcapturedevice
-[7]:	https://developer.apple.com/documentation/avfoundation/avauthorizationstatus
-[8]:	https://developer.apple.com/documentation/avfoundation/capture_setup/requesting_authorization_to_capture_and_save_media
-[9]:	x-source-tag://ChangeCamera
-[10]:	https://developer.apple.com/documentation/avfoundation/avcapturesessionwasinterruptednotification
-[11]:	x-source-tag://ObserveInterruption
-[12]:	x-source-tag://HandleInterruption
-[13]:	AVCaptureSessionRuntimeError
-[14]:	x-source-tag://HandleRuntimeError
-[15]:	(https://developer.apple.com/documentation/avfoundation/avcapturephotooutput)
-[16]:	https://developer.apple.com/documentation/avfoundation/avcapturephotosettings
-[17]:	https://developer.apple.com/documentation/avfoundation/avcapturephotooutput/1648765-capturephotowithsettings
-[18]:	x-source-tag://CapturePhoto
-[19]:	https://developer.apple.com/documentation/avfoundation/avcapturephotocapturedelegate
-[20]:	https://developer.apple.com/documentation/avfoundation/avcapturephotooutput/1648765-capturephoto
-[21]:	https://developer.apple.com/documentation/avfoundation/avcapturephotocapturedelegate/1778621-photooutput
-[22]:	https://developer.apple.com/documentation/avfoundation/avcaptureresolvedphotosettings/1648781-livephotomoviedimensions
-[23]:	x-source-tag://WillBeginCapture
-[24]:	https://developer.apple.com/documentation/avfoundation/avcapturephotocapturedelegate/1778625-photooutput
-[25]:	x-source-tag://WillCapturePhoto
-[26]:	https://developer.apple.com/documentation/avfoundation/avcapturephotocapturedelegate/1778618-photooutput
-[27]:	x-source-tag://DidFinishCapture
-[28]:	https://developer.apple.com/documentation/avfoundation/photo_capture/capturing_still_and_live_photos/tracking_photo_capture_progress
-[29]:	https://developer.apple.com/documentation/avfoundation/avcapturephotosettings/1648681-livephotomoviefileurl
-[30]:	https://developer.apple.com/documentation/avfoundation/avcapturephotocapturedelegate/1778658-photooutput
-[31]:	x-source-tag://DidFinishRecordingLive
-[32]:	https://developer.apple.com/documentation/avfoundation/avcapturephotocapturedelegate/1778637-photooutput
-[33]:	x-source-tag://DidFinishProcessingLive
-[34]:	https://developer.apple.com/documentation/avfoundation/photo_capture/capturing_still_and_live_photos
-[35]:	https://developer.apple.com/documentation/avfoundation/avcapturefileoutputrecordingdelegate/1390612-captureoutput
-[36]:	https://developer.apple.com/documentation/photokit/delivering_an_enhanced_privacy_experience_in_your_photos_app
-[37]:	https://developer.apple.com/documentation/avfoundation/avcapturefileoutput/1387224-startrecording
-[38]:	https://developer.apple.com/documentation/avfoundation/avcapturefileoutputrecordingdelegate
-[39]:	https://developer.apple.com/documentation/avfoundation/avcapturefileoutputrecordingdelegate/1387301-fileoutput
-[40]:	x-source-tag://DidStartRecording
-[41]:	https://developer.apple.com/documentation/avfoundation/avcapturefileoutputrecordingdelegate/1390612-fileoutput
-[42]:	x-source-tag://DidFinishRecording
-[43]:	https://developer.apple.com/documentation/uikit/uiapplication/1622970-endbackgroundtask
-[44]:	https://developer.apple.com/documentation/avfoundation/avcapturefileoutputrecordingdelegate/1390612-fileoutput
-
-[image-1]:	Documentation/AVCamBlocks.png
-[image-2]:	Documentation/AVTimelineStill.png
-[image-3]:	Documentation/AVTimelineLive.png
-[image-4]:	Documentation/AVTimelineMovie.png
