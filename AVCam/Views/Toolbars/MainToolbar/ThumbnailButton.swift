@@ -19,19 +19,22 @@ struct ThumbnailButton<CameraModel: Camera>: View {
 	
     var body: some View {
         PhotosPicker( selection: $selectedItems, matching: .images, photoLibrary: .shared()) {
-            Group {
-                if let thumbnail = camera.thumbnail {
-                    Image(thumbnail)
-                        .resizable()
-                        .aspectRatio(contentMode: .fill)
-                        .animation(.easeInOut(duration: 0.3), value: camera.thumbnail)
-                } else {
-                    Image(systemName: "photo.on.rectangle")
-                }
-            }
+            thumbnail
         }
 		.frame(width: 64.0, height: 64.0)
 		.cornerRadius(8)
         .disabled(camera.captureActivity.isRecording)
+    }
+    
+    @ViewBuilder
+    var thumbnail: some View {
+        if let thumbnail = camera.thumbnail {
+            Image(thumbnail)
+                .resizable()
+                .aspectRatio(contentMode: .fill)
+                .animation(.easeInOut(duration: 0.3), value: thumbnail)
+        } else {
+            Image(systemName: "photo.on.rectangle")
+        }
     }
 }
