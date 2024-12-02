@@ -16,7 +16,7 @@ The key type the app defines is `CaptureService`, an actor that manages the inte
 Because Simulator doesn't have access to device cameras, it isn't suitable for running the app—you'll need to run it on a device. To run this sample, you'll need the following:
 * An iOS device with iOS 18 or later
 
-AVCam adopts the [LockedCameraCapture](https://developer.apple.com/documentation/lockedcameracapture) framework, which makes the app eligible to launch from the Lock Screen, Control Center, Action Button, and the Camera Control. To support this framework, in addition to the main app target, the sample adds a capture extension target and a Control Center extension target. Set your signing credentials on each target to build and run the sample.
+AVCam adopts the [LockedCameraCapture](https://developer.apple.com/documentation/lockedcameracapture) framework, which makes the app eligible to launch from the Lock Screen, Control Center, Action Button, and the Camera Control. To support this framework, the sample adds a capture extension target and a Control Center extension target in addition to the main app target. Set your signing credentials on each target to build and run the sample.
 
 ## Configure a capture session
 The central object in any capture app is an instance of [AVCaptureSession](https://developer.apple.com/documentation/avfoundation/avcapturesession). A capture session is the central hub to which the app connects inputs from camera and microphone devices, and attaches them to outputs that capture media like photos and video. After configuring the session, the app uses it to control the flow of data through the capture pipeline.

@@ -20,7 +20,7 @@ struct AVCamCaptureIntent: CameraCaptureIntent {
     @MainActor
     func perform() async throws -> some IntentResult {
         os.Logger().debug("AVCam capture intent performed successfully.")
-        // The return type of this Intent is None; the success status should not be user-visible
+        // The return type of this intent is None; the success status isn't user-visible.
         return .result()
     }
 }
