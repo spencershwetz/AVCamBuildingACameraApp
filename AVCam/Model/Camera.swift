@@ -31,6 +31,9 @@ protocol Camera: AnyObject {
     
     /// A Boolean value that indicates whether the camera is currently switching capture modes.
     var isSwitchingModes: Bool { get }
+    
+    /// A Boolean value that indicates whether the camera prefers showing a minimized set of UI controls.
+    var prefersMinimizedUI: Bool { get }
 
     /// Switches between video devices available on the host system.
     func switchVideoDevices() async
@@ -38,11 +41,14 @@ protocol Camera: AnyObject {
     /// A Boolean value that indicates whether the camera is currently switching video devices.
     var isSwitchingVideoDevices: Bool { get }
     
-    /// The photo features that a person can enable in the user interface.
-    var photoFeatures: PhotoFeatures { get }
-
     /// Performs a one-time automatic focus and exposure operation.
     func focusAndExpose(at point: CGPoint) async
+    
+    /// A Boolean value that indicates whether to capture Live Photos when capturing stills.
+    var isLivePhotoEnabled: Bool { get set }
+    
+    /// A value that indicates how to balance the photo capture quality versus speed.
+    var qualityPrioritization: QualityPrioritization { get set }
     
     /// Captures a photo and writes it to the user's photo library.
     func capturePhoto() async
@@ -64,4 +70,7 @@ protocol Camera: AnyObject {
     
     /// An error if the camera encountered a problem.
     var error: Error? { get }
+    
+    /// Synchronize the state of the camera with the persisted values.
+    func syncState() async
 }

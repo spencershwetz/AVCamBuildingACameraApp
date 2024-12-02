@@ -16,24 +16,13 @@ struct FeaturesToolbar<CameraModel: Camera>: PlatformView {
     @State var camera: CameraModel
     
     var body: some View {
-        @Bindable var features = camera.photoFeatures
-        
         HStack(spacing: 30) {
+            Spacer()
             switch camera.captureMode {
             case .photo:
-                
-                if isCompactSize {
-                    livePhotoButton
-                    Spacer()
-                    prioritizePicker
-                } else {
-                    Spacer()
-                    livePhotoButton
-                    prioritizePicker
-                }
-                
+                livePhotoButton
+                prioritizePicker
             case .video:
-                Spacer()
                 if camera.isHDRVideoSupported {
                     hdrButton
                 }
@@ -41,34 +30,39 @@ struct FeaturesToolbar<CameraModel: Camera>: PlatformView {
         }
         .buttonStyle(DefaultButtonStyle(size: isRegularSize ? .large : .small))
         .padding([.leading, .trailing])
+        // Hide the toolbar items when a person interacts with capture controls.
+        .opacity(camera.prefersMinimizedUI ? 0 : 1)
     }
     
     //  A button to toggle the enabled state of Live Photo capture.
     var livePhotoButton: some View {
         Button {
-            camera.photoFeatures.isLivePhotoEnabled.toggle()
+            camera.isLivePhotoEnabled.toggle()
         } label: {
-            VStack {
-                Image(systemName: "livephoto")
-                    .foregroundColor(camera.photoFeatures.isLivePhotoEnabled ? .accentColor : .primary)
-            }
+            Image(systemName: camera.isLivePhotoEnabled ? "livephoto" : "livephoto.slash")
         }
-        .frame(width: smallButtonSize.width, height: smallButtonSize.height)
     }
     
     @ViewBuilder
     var prioritizePicker: some View {
-        @Bindable var features = camera.photoFeatures
-        Picker("Quality Prioritization", selection: $features.qualityPrioritization) {
-            ForEach(QualityPrioritization.allCases) {
-                Text($0.description)
-                    .font(.body.weight(.bold))
+        Menu {
+            Picker("Quality Prioritization", selection: $camera.qualityPrioritization) {
+                ForEach(QualityPrioritization.allCases) {
+                    Text($0.description)
+                        .font(.body.weight(.bold))
+                }
+            }
+
+        } label: {
+            switch camera.qualityPrioritization {
+            case .speed:
+                Image(systemName: "dial.low")
+            case .balanced:
+                Image(systemName: "dial.medium")
+            case .quality:
+                Image(systemName: "dial.high")
             }
         }
-        .frame(width: 120)
-        .pickerStyle(.menu)
-        .buttonStyle(.bordered)
-        .buttonBorderShape(.capsule)
     }
 
     @ViewBuilder
@@ -88,7 +82,6 @@ struct FeaturesToolbar<CameraModel: Camera>: PlatformView {
         } label: {
             Text("HDR \(camera.isHDRVideoEnabled ? "On" : "Off")")
                 .font(.body.weight(.semibold))
-                .foregroundStyle(camera.isHDRVideoEnabled ? .accent : .secondary)
         }
         .disabled(camera.captureActivity.isRecording)
     }

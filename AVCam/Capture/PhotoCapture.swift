@@ -33,7 +33,7 @@ final class PhotoCapture: OutputService {
     // MARK: - Capture a photo.
     
     /// The app calls this method when the user taps the photo capture button.
-    func capturePhoto(with features: EnabledPhotoFeatures) async throws -> Photo {
+    func capturePhoto(with features: PhotoFeatures) async throws -> Photo {
         // Wrap the delegate-based capture API in a continuation to use it in an async context.
         try await withCheckedThrowingContinuation { continuation in
             
@@ -51,7 +51,7 @@ final class PhotoCapture: OutputService {
     // MARK: - Create a photo settings object.
     
     // Create a photo settings object with the features a person enables in the UI.
-    private func createPhotoSettings(with features: EnabledPhotoFeatures) -> AVCapturePhotoSettings {
+    private func createPhotoSettings(with features: PhotoFeatures) -> AVCapturePhotoSettings {
         // Create a new settings object to configure the photo capture.
         var photoSettings = AVCapturePhotoSettings()
         
@@ -70,9 +70,6 @@ final class PhotoCapture: OutputService {
         /// `CaptureService` automatically updates the photo output's `maxPhotoDimensions`
         /// when the capture pipeline changes.
         photoSettings.maxPhotoDimensions = photoOutput.maxPhotoDimensions
-        
-        // Set the flash mode.
-        photoSettings.flashMode = features.isFlashEnabled ? .auto : .off
         
         // Set the movie URL if the photo output supports Live Photo capture.
         photoSettings.livePhotoMovieFileURL = features.isLivePhotoEnabled ? URL.movieFileURL : nil
@@ -131,8 +128,7 @@ final class PhotoCapture: OutputService {
     }
     
     private func updateCapabilities(for device: AVCaptureDevice) {
-        capabilities = CaptureCapabilities(isFlashSupported: device.isFlashAvailable,
-                                           isLivePhotoCaptureSupported: photoOutput.isLivePhotoCaptureSupported)
+        capabilities = CaptureCapabilities(isLivePhotoCaptureSupported: photoOutput.isLivePhotoCaptureSupported)
     }
 }
 

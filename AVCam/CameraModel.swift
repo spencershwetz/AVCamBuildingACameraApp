@@ -25,11 +25,11 @@ final class CameraModel: Camera {
     /// The current state of photo or movie capture.
     private(set) var captureActivity = CaptureActivity.idle
     
-    /// The photo features that a person can enable in the user interface.
-    private(set) var photoFeatures = PhotoFeatures()
-    
     /// A Boolean value that indicates whether the app is currently switching video devices.
     private(set) var isSwitchingVideoDevices = false
+    
+    /// A Boolean value that indicates whether the camera prefers showing a minimized set of UI controls.
+    private(set) var prefersMinimizedUI = false
     
     /// A Boolean value that indicates whether the app is currently switching capture modes.
     private(set) var isSwitchingModes = false
@@ -55,6 +55,9 @@ final class CameraModel: Camera {
     /// An object that manages the app's capture functionality.
     private let captureService = CaptureService()
     
+    /// Persistent state shared between the app and capture extension.
+    private var cameraState = CameraState()
+    
     init() {
         //
     }
@@ -68,8 +71,10 @@ final class CameraModel: Camera {
             return
         }
         do {
+            // Synchronize the state of the model with the persistent state.
+            await syncState()
             // Start the capture service to start the flow of data.
-            try await captureService.start()
+            try await captureService.start(with: cameraState)
             observeState()
             status = .running
         } catch {
@@ -78,16 +83,30 @@ final class CameraModel: Camera {
         }
     }
     
+    /// Synchronizes the persistent camera state.
+    ///
+    /// `CameraState` represents the persistent state, such as the capture mode, that the app and extension share.
+    func syncState() async {
+        cameraState = await CameraState.current
+        captureMode = cameraState.captureMode
+        qualityPrioritization = cameraState.qualityPrioritization
+        isLivePhotoEnabled = cameraState.isLivePhotoEnabled
+        isHDRVideoEnabled = cameraState.isVideoHDREnabled
+    }
+    
     // MARK: - Changing modes and devices
     
     /// A value that indicates the mode of capture for the camera.
     var captureMode = CaptureMode.photo {
         didSet {
+            guard status == .running else { return }
             Task {
                 isSwitchingModes = true
                 defer { isSwitchingModes = false }
                 // Update the configuration of the capture service for the new mode.
                 try? await captureService.setCaptureMode(captureMode)
+                // Update the persistent state value.
+                cameraState.captureMode = captureMode
             }
         }
     }
@@ -104,10 +123,27 @@ final class CameraModel: Camera {
     /// Captures a photo and writes it to the user's Photos library.
     func capturePhoto() async {
         do {
-            let photo = try await captureService.capturePhoto(with: photoFeatures.current)
+            let photoFeatures = PhotoFeatures(isLivePhotoEnabled: isLivePhotoEnabled, qualityPrioritization: qualityPrioritization)
+            let photo = try await captureService.capturePhoto(with: photoFeatures)
             try await mediaLibrary.save(photo: photo)
         } catch {
             self.error = error
+        }
+    }
+    
+    /// A Boolean value that indicates whether to capture Live Photos when capturing stills.
+    var isLivePhotoEnabled = true {
+        didSet {
+            // Update the persistent state value.
+            cameraState.isLivePhotoEnabled = isLivePhotoEnabled
+        }
+    }
+    
+    /// A value that indicates how to balance the photo capture quality versus speed.
+    var qualityPrioritization = QualityPrioritization.quality {
+        didSet {
+            // Update the persistent state value.
+            cameraState.qualityPrioritization = qualityPrioritization
         }
     }
     
@@ -128,8 +164,11 @@ final class CameraModel: Camera {
     /// A Boolean value that indicates whether the camera captures video in HDR format.
     var isHDRVideoEnabled = false {
         didSet {
+            guard status == .running, captureMode == .video else { return }
             Task {
                 await captureService.setHDRVideoEnabled(isHDRVideoEnabled)
+                // Update the persistent state value.
+                cameraState.isVideoHDREnabled = isHDRVideoEnabled
             }
         }
     }
@@ -179,6 +218,17 @@ final class CameraModel: Camera {
             // Await updates to the capabilities that the capture service advertises.
             for await capabilities in await captureService.$captureCapabilities.values {
                 isHDRVideoSupported = capabilities.isHDRSupported
+                cameraState.isVideoHDRSupported = capabilities.isHDRSupported
+            }
+        }
+        
+        Task {
+            // Await updates to a person's interaction with the Camera Control HUD.
+            for await isShowingFullscreenControls in await captureService.$isShowingFullscreenControls.values {
+                withAnimation {
+                    // Prefer showing a minimized UI when capture controls enter a fullscreen appearance.
+                    prefersMinimizedUI = isShowingFullscreenControls
+                }
             }
         }
     }

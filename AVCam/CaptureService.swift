@@ -21,6 +21,8 @@ actor CaptureService {
     @Published private(set) var isInterrupted = false
     /// A Boolean value that indicates whether the user enables HDR video capture.
     @Published var isHDRVideoEnabled = false
+    /// A Boolean value that indicates whether capture controls are in a fullscreen appearance.
+    @Published var isShowingFullscreenControls = false
     
     /// A type that connects a preview destination with the capture session.
     nonisolated let previewSource: PreviewSource
@@ -56,6 +58,20 @@ actor CaptureService {
     // A Boolean value that indicates whether the actor finished its required configuration.
     private var isSetUp = false
     
+    // A delegate object that responds to capture control activation and presentation events.
+    private var controlsDelegate = CaptureControlsDelegate()
+    
+    // A map that stores capture controls by device identifier.
+    private var controlsMap: [String: [AVCaptureControl]] = [:]
+    
+    // A serial dispatch queue to use for capture control actions.
+    private let sessionQueue = DispatchSerialQueue(label: "com.example.apple-samplecode.AVCam.sessionQueue")
+    
+    // Sets the session queue as the actor's executor.
+    nonisolated var unownedExecutor: UnownedSerialExecutor {
+        sessionQueue.asUnownedSerialExecutor()
+    }
+    
     init() {
         // Create a source object to connect the preview view with the capture session.
         previewSource = DefaultPreviewSource(session: captureSession)
@@ -80,7 +96,11 @@ actor CaptureService {
     }
     
     // MARK: - Capture session life cycle
-    func start() async throws {
+    func start(with state: CameraState) async throws {
+        // Set initial operating state.
+        captureMode = state.captureMode
+        isHDRVideoEnabled = state.isVideoHDREnabled
+        
         // Exit early if not authorized or the session is already running.
         guard await isAuthorized, !captureSession.isRunning else { return }
         // Configure the session and start it.
@@ -97,6 +117,7 @@ actor CaptureService {
         // Observe internal state and notifications.
         observeOutputServices()
         observeNotifications()
+        observeCaptureControlsState()
         
         do {
             // Retrieve the default camera and microphone.
@@ -107,14 +128,21 @@ actor CaptureService {
             activeVideoInput = try addInput(for: defaultCamera)
             try addInput(for: defaultMic)
 
-            // Configure the session for photo capture by default.
-            captureSession.sessionPreset = .photo
+            // Configure the session preset based on the current capture mode.
+            captureSession.sessionPreset = captureMode == .photo ? .photo : .high
             // Add the photo capture output as the default output type.
             try addOutput(photoCapture.output)
+            // If the capture mode is set to Video, add a movie capture output.
+            if captureMode == .video {
+                // Add the movie output as the default output type.
+                try addOutput(movieCapture.output)
+                setHDRVideoEnabled(isHDRVideoEnabled)
+            }
             
+            // Configure controls to use with the Camera Control.
+            configureControls(for: defaultCamera)
             // Monitor the system-preferred camera state.
             monitorSystemPreferredCamera()
-            
             // Configure a rotation coordinator for the default video device.
             createRotationCoordinator(for: defaultCamera)
             // Observe changes to the default camera's subject area.
@@ -155,6 +183,71 @@ actor CaptureService {
             fatalError("No device found for current video input.")
         }
         return device
+    }
+    
+    // MARK: - Capture controls
+    
+    private func configureControls(for device: AVCaptureDevice) {
+        
+        // Exit early if the host device doesn't support capture controls.
+        guard captureSession.supportsControls else { return }
+        
+        // Begin configuring the capture session.
+        captureSession.beginConfiguration()
+        
+        // Remove previously configured controls, if any.
+        for control in captureSession.controls {
+            captureSession.removeControl(control)
+        }
+        
+        // Create controls and add them to the capture session.
+        for control in createControls(for: device) {
+            if captureSession.canAddControl(control) {
+                captureSession.addControl(control)
+            } else {
+                logger.info("Unable to add control \(control).")
+            }
+        }
+        
+        // Set the controls delegate.
+        captureSession.setControlsDelegate(controlsDelegate, queue: sessionQueue)
+        
+        // Commit the capture session configuration.
+        captureSession.commitConfiguration()
+    }
+    
+    func createControls(for device: AVCaptureDevice) -> [AVCaptureControl] {
+        // Retrieve the capture controls for this device, if they exist.
+        guard let controls = controlsMap[device.uniqueID] else {
+            // Define the default controls.
+            var controls = [
+                AVCaptureSystemZoomSlider(device: device),
+                AVCaptureSystemExposureBiasSlider(device: device)
+            ]
+            // Create a lens position control if the device supports setting a custom position.
+            if device.isLockingFocusWithCustomLensPositionSupported {
+                // Create a slider to adjust the value from 0 to 1.
+                let lensSlider = AVCaptureSlider("Lens Position", symbolName: "circle.dotted.circle", in: 0...1)
+                // Perform the slider's action on the session queue.
+                lensSlider.setActionQueue(sessionQueue) { lensPosition in
+                    do {
+                        try device.lockForConfiguration()
+                        device.setFocusModeLocked(lensPosition: lensPosition)
+                        device.unlockForConfiguration()
+                    } catch {
+                        logger.info("Unable to change the lens position: \(error)")
+                    }
+                }
+                // Add the slider the controls array.
+                controls.append(lensSlider)
+            }
+            // Store the controls for future use.
+            controlsMap[device.uniqueID] = controls
+            return controls
+        }
+        
+        // Return the previously created controls.
+        return controls
     }
     
     // MARK: - Capture mode selection
@@ -231,6 +324,8 @@ actor CaptureService {
         do {
             // Attempt to connect a new input and device to the capture session.
             activeVideoInput = try addInput(for: device)
+            // Configure capture controls for new device selection.
+            configureControls(for: device)
             // Configure a new rotation coordinator for the new device.
             createRotationCoordinator(for: device)
             // Register for device observations.
@@ -373,7 +468,7 @@ actor CaptureService {
     }
     
     // MARK: - Photo capture
-    func capturePhoto(with features: EnabledPhotoFeatures) async throws -> Photo {
+    func capturePhoto(with features: PhotoFeatures) async throws -> Photo {
         try await photoCapture.capturePhoto(with: features)
     }
     
@@ -435,6 +530,12 @@ actor CaptureService {
             .assign(to: &$captureActivity)
     }
     
+    /// Observe when capture control enter and exit a fullscreen appearance.
+    private func observeCaptureControlsState() {
+        controlsDelegate.$isShowingFullscreenControls
+            .assign(to: &$isShowingFullscreenControls)
+    }
+    
     /// Observe capture-related notifications.
     private func observeNotifications() {
         Task {
@@ -464,5 +565,28 @@ actor CaptureService {
                 }
             }
         }
+    }
+}
+
+class CaptureControlsDelegate: NSObject, AVCaptureSessionControlsDelegate {
+    
+    @Published private(set) var isShowingFullscreenControls = false
+
+    func sessionControlsDidBecomeActive(_ session: AVCaptureSession) {
+        logger.debug("Capture controls active.")
+    }
+
+    func sessionControlsWillEnterFullscreenAppearance(_ session: AVCaptureSession) {
+        isShowingFullscreenControls = true
+        logger.debug("Capture controls will enter fullscreen appearance.")
+    }
+    
+    func sessionControlsWillExitFullscreenAppearance(_ session: AVCaptureSession) {
+        isShowingFullscreenControls = false
+        logger.debug("Capture controls will exit fullscreen appearance.")
+    }
+    
+    func sessionControlsDidBecomeInactive(_ session: AVCaptureSession) {
+        logger.debug("Capture controls inactive.")
     }
 }

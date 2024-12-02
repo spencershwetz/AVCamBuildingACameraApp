@@ -63,7 +63,7 @@ enum CaptureActivity {
 }
 
 /// An enumeration of the capture modes that the camera supports.
-enum CaptureMode: String, Identifiable, CaseIterable {
+enum CaptureMode: String, Identifiable, CaseIterable, Codable {
     var id: Self { self }
     /// A mode that enables photo capture.
     case photo
@@ -93,22 +93,7 @@ struct Movie: Sendable {
     let url: URL
 }
 
-@Observable
-/// An object that stores the state of a person's enabled photo features.
-class PhotoFeatures {
-    var isFlashEnabled = false
-    var isLivePhotoEnabled = false
-    var qualityPrioritization: QualityPrioritization = .quality
-    
-    var current: EnabledPhotoFeatures {
-        .init(isFlashEnabled: isFlashEnabled,
-              isLivePhotoEnabled: isLivePhotoEnabled,
-              qualityPrioritization: qualityPrioritization)
-    }
-}
-
-struct EnabledPhotoFeatures {
-    let isFlashEnabled: Bool
+struct PhotoFeatures {
     let isLivePhotoEnabled: Bool
     let qualityPrioritization: QualityPrioritization
 }
@@ -116,15 +101,12 @@ struct EnabledPhotoFeatures {
 /// A structure that represents the capture capabilities of `CaptureService` in
 /// its current configuration.
 struct CaptureCapabilities {
-    let isFlashSupported: Bool
+
     let isLivePhotoCaptureSupported: Bool
     let isHDRSupported: Bool
     
-    init(isFlashSupported: Bool = false,
-         isLivePhotoCaptureSupported: Bool = false,
+    init(isLivePhotoCaptureSupported: Bool = false,
          isHDRSupported: Bool = false) {
-        
-        self.isFlashSupported = isFlashSupported
         self.isLivePhotoCaptureSupported = isLivePhotoCaptureSupported
         self.isHDRSupported = isHDRSupported
     }
@@ -132,7 +114,7 @@ struct CaptureCapabilities {
     static let unknown = CaptureCapabilities()
 }
 
-enum QualityPrioritization: Int, Identifiable, CaseIterable, CustomStringConvertible {
+enum QualityPrioritization: Int, Identifiable, CaseIterable, CustomStringConvertible, Codable {
     var id: Self { self }
     case speed = 1
     case balanced

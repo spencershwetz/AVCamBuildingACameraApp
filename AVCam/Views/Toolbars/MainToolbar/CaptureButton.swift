@@ -12,6 +12,7 @@ import SwiftUI
 struct CaptureButton<CameraModel: Camera>: View {
     
     @State var camera: CameraModel
+    @State var isRecording = false
     
     private let mainButtonDimension: CGFloat = 68
     
@@ -19,6 +20,13 @@ struct CaptureButton<CameraModel: Camera>: View {
         captureButton
             .aspectRatio(1.0, contentMode: .fit)
             .frame(width: mainButtonDimension)
+            // Respond to recording state changes that occur from hardware button presses.
+            .onChange(of: camera.captureActivity.isRecording) { _, newValue in
+                // Ensure the button animation occurs when toggling recording state from a hardware button.
+                withAnimation(.easeInOut(duration: 0.25)) {
+                    isRecording = newValue
+                }
+            }
     }
     
     @ViewBuilder
@@ -31,7 +39,7 @@ struct CaptureButton<CameraModel: Camera>: View {
                 }
             }
         case .video:
-            MovieCaptureButton { _ in
+            MovieCaptureButton(isRecording: $isRecording) { _ in
                 Task {
                     await camera.toggleRecording()
                 }
@@ -86,9 +94,10 @@ private struct MovieCaptureButton: View {
     private let action: (Bool) -> Void
     private let lineWidth = CGFloat(4.0)
     
-    @State private var isRecording = false
+    @Binding private var isRecording: Bool
     
-    init(action: @escaping (Bool) -> Void) {
+    init(isRecording: Binding<Bool>, action: @escaping (Bool) -> Void) {
+        _isRecording = isRecording
         self.action = action
     }
     

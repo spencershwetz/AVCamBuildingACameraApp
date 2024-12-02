@@ -10,7 +10,10 @@ import SwiftUI
 
 @Observable
 class PreviewCameraModel: Camera {
-
+    
+    var isLivePhotoEnabled = true
+    var prefersMinimizedUI = false
+    var qualityPrioritization = QualityPrioritization.quality
     var shouldFlashScreen = false
     var isHDRVideoSupported = false
     var isHDRVideoEnabled = false
@@ -37,7 +40,6 @@ class PreviewCameraModel: Camera {
     private(set) var isSwitchingModes = false
     private(set) var isVideoDeviceSwitchable = true
     private(set) var isSwitchingVideoDevices = false
-    private(set) var photoFeatures = PhotoFeatures()
     private(set) var thumbnail: CGImage?
     
     var error: Error?
@@ -74,12 +76,14 @@ class PreviewCameraModel: Camera {
     private func capabilities(for mode: CaptureMode) -> CaptureCapabilities {
         switch mode {
         case .photo:
-            return CaptureCapabilities(isFlashSupported: true,
-                                       isLivePhotoCaptureSupported: true)
+            return CaptureCapabilities(isLivePhotoCaptureSupported: true)
         case .video:
-            return CaptureCapabilities(isFlashSupported: false,
-                                       isLivePhotoCaptureSupported: false,
+            return CaptureCapabilities(isLivePhotoCaptureSupported: false,
                                        isHDRSupported: true)
         }
+    }
+    
+    func syncState() async {
+        logger.debug("Syncing state isn't implemented in PreviewCamera.")
     }
 }
