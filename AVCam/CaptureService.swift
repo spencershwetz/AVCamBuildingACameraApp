@@ -512,7 +512,7 @@ actor CaptureService {
     }
     
     /// Sets whether the app captures Apple Log.
-    func setAppleLogEnabled(_ isEnabled: Bool) {
+    func setAppleLogEnabled(_ isEnabled: Bool) async {
         captureSession.beginConfiguration()
         defer { captureSession.commitConfiguration() }
         
@@ -520,26 +520,57 @@ actor CaptureService {
             if isEnabled, let format = currentDevice.activeFormatAppleLogVariant {
                 logger.debug("Attempting to enable Apple Log")
                 logger.debug("Selected format: \(format.formatDescription.dimensions.width)x\(format.formatDescription.dimensions.height)")
-                logger.debug("Format supports Apple Log: \(format.supportsAppleLog)")
-                logger.debug("Supported color spaces: \(format.supportedColorSpaces.map { String(describing: $0) })")
+                logger.debug("Current color space before change: \(String(describing: self.currentDevice.activeColorSpace))")
                 
                 try currentDevice.lockForConfiguration()
+                
+                // First set the format
                 currentDevice.activeFormat = format
                 logger.debug("Set active format successfully")
                 
-                currentDevice.activeColorSpace = .appleLog
-                logger.debug("Set color space to Apple Log")
+                // Force a brief delay to ensure format change is complete
+                try await Task.sleep(for: .milliseconds(100))
+                
+                // Explicitly set to Apple Log color space and verify
+                if format.supportedColorSpaces.contains(.appleLog) {
+                    // First set to sRGB to reset any existing color space
+                    currentDevice.activeColorSpace = .sRGB
+                    try await Task.sleep(for: .milliseconds(50))
+                    
+                    // Now set to Apple Log
+                    currentDevice.activeColorSpace = .appleLog
+                    
+                    // Verify the color space was set correctly
+                    if currentDevice.activeColorSpace == .appleLog {
+                        logger.debug("Successfully set and verified Apple Log color space")
+                        isAppleLogEnabled = true
+                    } else {
+                        logger.error("Failed to set Apple Log: Active color space is \(String(describing: self.currentDevice.activeColorSpace))")
+                        isAppleLogEnabled = false
+                    }
+                } else {
+                    logger.error("Selected format does not support Apple Log color space")
+                    isAppleLogEnabled = false
+                }
                 
                 currentDevice.unlockForConfiguration()
-                isAppleLogEnabled = true
-                logger.debug("Apple Log enabled successfully")
+                
+                // Final verification
+                logger.debug("Final active color space: \(String(describing: self.currentDevice.activeColorSpace))")
+                logger.debug("Final active format supports: \(Array(self.currentDevice.activeFormat.supportedColorSpaces).map { String(describing: $0) })")
+                
             } else {
                 logger.debug("Disabling Apple Log")
-                captureSession.sessionPreset = .high
+                logger.debug("Current color space before disable: \(String(describing: self.currentDevice.activeColorSpace))")
+                
                 try currentDevice.lockForConfiguration()
                 currentDevice.activeColorSpace = .sRGB
                 currentDevice.unlockForConfiguration()
+                
+                captureSession.sessionPreset = .high
                 isAppleLogEnabled = false
+                
+                logger.debug("Final color space after disable: \(String(describing: self.currentDevice.activeColorSpace))")
                 logger.debug("Apple Log disabled successfully")
             }
         } catch {
