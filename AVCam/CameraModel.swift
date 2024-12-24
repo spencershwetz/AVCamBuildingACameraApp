@@ -58,6 +58,18 @@ final class CameraModel: Camera {
     /// Persistent state shared between the app and capture extension.
     private var cameraState = CameraState()
     
+    private(set) var isAppleLogSupported = false
+    var isAppleLogEnabled = false {
+        didSet {
+            guard status == .running, captureMode == .video else { return }
+            Task {
+                await captureService.setAppleLogEnabled(isAppleLogEnabled)
+                // Update the persistent state value
+                cameraState.isAppleLogEnabled = isAppleLogEnabled
+            }
+        }
+    }
+    
     init() {
         //
     }
@@ -218,7 +230,9 @@ final class CameraModel: Camera {
             // Await updates to the capabilities that the capture service advertises.
             for await capabilities in await captureService.$captureCapabilities.values {
                 isHDRVideoSupported = capabilities.isHDRSupported
+                isAppleLogSupported = capabilities.isAppleLogSupported
                 cameraState.isVideoHDRSupported = capabilities.isHDRSupported
+                cameraState.isAppleLogSupported = capabilities.isAppleLogSupported
             }
         }
         

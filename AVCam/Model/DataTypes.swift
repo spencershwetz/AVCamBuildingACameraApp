@@ -104,11 +104,14 @@ struct CaptureCapabilities {
 
     let isLivePhotoCaptureSupported: Bool
     let isHDRSupported: Bool
+    let isAppleLogSupported: Bool
     
     init(isLivePhotoCaptureSupported: Bool = false,
-         isHDRSupported: Bool = false) {
+         isHDRSupported: Bool = false,
+         isAppleLogSupported: Bool = false) {
         self.isLivePhotoCaptureSupported = isLivePhotoCaptureSupported
         self.isHDRSupported = isHDRSupported
+        self.isAppleLogSupported = isAppleLogSupported
     }
     
     static let unknown = CaptureCapabilities()

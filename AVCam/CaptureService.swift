@@ -5,9 +5,13 @@ Abstract:
 An object that manages a capture session and its inputs and outputs.
 */
 
-import Foundation
+@preconcurrency
 import AVFoundation
+import Foundation
 import Combine
+
+extension AVCaptureDevice: @unchecked Sendable {}
+extension AVCaptureDevice.Format: @unchecked Sendable {}
 
 /// An actor that manages the capture pipeline, which includes the capture session, device inputs, and capture outputs.
 /// The app defines it as an `actor` type to ensure that all camera operations happen off of the `@MainActor`.
@@ -23,6 +27,8 @@ actor CaptureService {
     @Published var isHDRVideoEnabled = false
     /// A Boolean value that indicates whether capture controls are in a fullscreen appearance.
     @Published var isShowingFullscreenControls = false
+    /// A Boolean value that indicates whether the user enables Apple Log capture.
+    @Published private(set) var isAppleLogEnabled = false
     
     /// A type that connects a preview destination with the capture session.
     nonisolated let previewSource: PreviewSource
@@ -505,6 +511,42 @@ actor CaptureService {
         }
     }
     
+    /// Sets whether the app captures Apple Log.
+    func setAppleLogEnabled(_ isEnabled: Bool) {
+        captureSession.beginConfiguration()
+        defer { captureSession.commitConfiguration() }
+        
+        do {
+            if isEnabled, let format = currentDevice.activeFormatAppleLogVariant {
+                logger.debug("Attempting to enable Apple Log")
+                logger.debug("Selected format: \(format.formatDescription.dimensions.width)x\(format.formatDescription.dimensions.height)")
+                logger.debug("Format supports Apple Log: \(format.supportsAppleLog)")
+                logger.debug("Supported color spaces: \(format.supportedColorSpaces.map { String(describing: $0) })")
+                
+                try currentDevice.lockForConfiguration()
+                currentDevice.activeFormat = format
+                logger.debug("Set active format successfully")
+                
+                currentDevice.activeColorSpace = .appleLog
+                logger.debug("Set color space to Apple Log")
+                
+                currentDevice.unlockForConfiguration()
+                isAppleLogEnabled = true
+                logger.debug("Apple Log enabled successfully")
+            } else {
+                logger.debug("Disabling Apple Log")
+                captureSession.sessionPreset = .high
+                try currentDevice.lockForConfiguration()
+                currentDevice.activeColorSpace = .sRGB
+                currentDevice.unlockForConfiguration()
+                isAppleLogEnabled = false
+                logger.debug("Apple Log disabled successfully")
+            }
+        } catch {
+            logger.error("Failed to configure Apple Log: \(error.localizedDescription)")
+        }
+    }
+    
     // MARK: - Internal state management
     /// Updates the state of the actor to ensure its advertised capabilities are accurate.
     ///
@@ -519,7 +561,12 @@ actor CaptureService {
         case .photo:
             captureCapabilities = photoCapture.capabilities
         case .video:
-            captureCapabilities = movieCapture.capabilities
+            // Update to include Apple Log support check
+            let isAppleLogSupported = currentDevice.activeFormatAppleLogVariant != nil
+            captureCapabilities = CaptureCapabilities(
+                isHDRSupported: currentDevice.activeFormat10BitVariant != nil,
+                isAppleLogSupported: isAppleLogSupported
+            )
         }
     }
     

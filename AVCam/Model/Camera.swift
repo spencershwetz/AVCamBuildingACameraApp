@@ -73,4 +73,10 @@ protocol Camera: AnyObject {
     
     /// Synchronize the state of the camera with the persisted values.
     func syncState() async
+    
+    /// A Boolean that indicates whether the camera supports Apple Log recording.
+    var isAppleLogSupported: Bool { get }
+    
+    /// A Boolean value that indicates whether camera enables Apple Log recording.
+    var isAppleLogEnabled: Bool { get set }
 }

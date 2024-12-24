@@ -30,6 +30,14 @@ struct CameraState: Codable {
         didSet { save() }
     }
     
+    var isAppleLogSupported = false {
+        didSet { save() }
+    }
+    
+    var isAppleLogEnabled = false {
+        didSet { save() }
+    }
+    
     private func save() {
         Task {
             do {

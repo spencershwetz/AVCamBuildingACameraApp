@@ -26,6 +26,9 @@ struct FeaturesToolbar<CameraModel: Camera>: PlatformView {
                 if camera.isHDRVideoSupported {
                     hdrButton
                 }
+                if camera.isAppleLogSupported {
+                    appleLogButton
+                }
             }
         }
         .buttonStyle(DefaultButtonStyle(size: isRegularSize ? .large : .small))
@@ -81,6 +84,27 @@ struct FeaturesToolbar<CameraModel: Camera>: PlatformView {
             camera.isHDRVideoEnabled.toggle()
         } label: {
             Text("HDR \(camera.isHDRVideoEnabled ? "On" : "Off")")
+                .font(.body.weight(.semibold))
+        }
+        .disabled(camera.captureActivity.isRecording)
+    }
+    
+    @ViewBuilder
+    var appleLogButton: some View {
+        if isCompactSize {
+            appleLogToggleButton
+        } else {
+            appleLogToggleButton
+                .buttonStyle(.bordered)
+                .buttonBorderShape(.capsule)
+        }
+    }
+    
+    var appleLogToggleButton: some View {
+        Button {
+            camera.isAppleLogEnabled.toggle()
+        } label: {
+            Text("Log \(camera.isAppleLogEnabled ? "On" : "Off")")
                 .font(.body.weight(.semibold))
         }
         .disabled(camera.captureActivity.isRecording)

@@ -18,6 +18,9 @@ class PreviewCameraModel: Camera {
     var isHDRVideoSupported = false
     var isHDRVideoEnabled = false
     
+    var isAppleLogSupported = false
+    var isAppleLogEnabled = false
+    
     struct PreviewSourceStub: PreviewSource {
         // Stubbed out for test purposes.
         func connect(to target: PreviewTarget) {}
