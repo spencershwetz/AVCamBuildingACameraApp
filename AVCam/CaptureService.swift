@@ -1,17 +1,19 @@
-/*
-See the LICENSE.txt file for this sample’s licensing information.
-
-Abstract:
-An object that manages a capture session and its inputs and outputs.
-*/
+//
+//  CaptureService.swift
+//  AVCam
+//
+//  Created by Apple on 7/19/23.
+//  Copyright © 2023 Apple Inc.
+//  See the LICENSE.txt file for this sample’s licensing information.
+//
+//  Abstract:
+//  An object that manages a capture session and its inputs and outputs.
+//
 
 @preconcurrency
 import AVFoundation
 import Foundation
 import Combine
-
-extension AVCaptureDevice: @unchecked Sendable {}
-extension AVCaptureDevice.Format: @unchecked Sendable {}
 
 /// An actor that manages the capture pipeline, which includes the capture session, device inputs, and capture outputs.
 /// The app defines it as an `actor` type to ensure that all camera operations happen off of the `@MainActor`.
@@ -389,7 +391,7 @@ actor CaptureService {
         rotationObservers.append(
             rotationCoordinator.observe(\.videoRotationAngleForHorizonLevelCapture, options: .new) { [weak self] _, change in
                 guard let self, let angle = change.newValue else { return }
-                // Update the capture preview rotation.
+                // Update the capture output rotation.
                 Task { await self.updateCaptureRotation(angle) }
             }
         )
@@ -520,9 +522,12 @@ actor CaptureService {
             if isEnabled, let format = currentDevice.activeFormatAppleLogVariant {
                 logger.debug("Attempting to enable Apple Log")
                 logger.debug("Selected format: \(format.formatDescription.dimensions.width)x\(format.formatDescription.dimensions.height)")
+                
+                // Directly log the current color space (no 'if let' needed, it's not optional).
                 logger.debug("Current color space before change: \(String(describing: self.currentDevice.activeColorSpace))")
                 
                 try currentDevice.lockForConfiguration()
+                defer { currentDevice.unlockForConfiguration() }
                 
                 // First set the format
                 currentDevice.activeFormat = format
@@ -532,20 +537,32 @@ actor CaptureService {
                 try await Task.sleep(for: .milliseconds(100))
                 
                 // Explicitly set to Apple Log color space and verify
-                if format.supportedColorSpaces.contains(.appleLog) {
-                    // First set to sRGB to reset any existing color space
-                    currentDevice.activeColorSpace = .sRGB
+                if format.supportsColorSpace(.appleLog) {
+                    // First disable HDR if it's enabled
+                    isHDRVideoEnabled = false
+                    
+                    // Reset format and color space
+                    captureSession.sessionPreset = .high
+                    if format.supportsColorSpace(.sRGB) {
+                        currentDevice.activeColorSpace = format.sRGBColorSpace
+                    }
+                    try await Task.sleep(for: .milliseconds(50))
+                    
+                    // Set format again and then Apple Log
+                    currentDevice.activeFormat = format
                     try await Task.sleep(for: .milliseconds(50))
                     
                     // Now set to Apple Log
-                    currentDevice.activeColorSpace = .appleLog
+                    currentDevice.activeColorSpace = format.appleLogColorSpace
+                    try await Task.sleep(for: .milliseconds(50))
                     
                     // Verify the color space was set correctly
-                    if currentDevice.activeColorSpace == .appleLog {
+                    let activeColorSpace = currentDevice.activeColorSpace
+                    if activeColorSpace == format.appleLogColorSpace {
                         logger.debug("Successfully set and verified Apple Log color space")
                         isAppleLogEnabled = true
                     } else {
-                        logger.error("Failed to set Apple Log: Active color space is \(String(describing: self.currentDevice.activeColorSpace))")
+                        logger.error("Failed to set Apple Log: Active color space is \(String(describing: activeColorSpace))")
                         isAppleLogEnabled = false
                     }
                 } else {
@@ -553,10 +570,9 @@ actor CaptureService {
                     isAppleLogEnabled = false
                 }
                 
-                currentDevice.unlockForConfiguration()
-                
                 // Final verification
-                logger.debug("Final active color space: \(String(describing: self.currentDevice.activeColorSpace))")
+                let finalColorSpace = currentDevice.activeColorSpace
+                logger.debug("Final active color space: \(String(describing: finalColorSpace))")
                 logger.debug("Final active format supports: \(Array(self.currentDevice.activeFormat.supportedColorSpaces).map { String(describing: $0) })")
                 
             } else {
@@ -564,13 +580,17 @@ actor CaptureService {
                 logger.debug("Current color space before disable: \(String(describing: self.currentDevice.activeColorSpace))")
                 
                 try currentDevice.lockForConfiguration()
-                currentDevice.activeColorSpace = .sRGB
-                currentDevice.unlockForConfiguration()
+                defer { currentDevice.unlockForConfiguration() }
                 
+                // Reset everything
                 captureSession.sessionPreset = .high
+                if currentDevice.activeFormat.supportsColorSpace(.sRGB) {
+                    currentDevice.activeColorSpace = currentDevice.activeFormat.sRGBColorSpace
+                }
                 isAppleLogEnabled = false
                 
-                logger.debug("Final color space after disable: \(String(describing: self.currentDevice.activeColorSpace))")
+                let finalColorSpace = currentDevice.activeColorSpace
+                logger.debug("Final color space after disable: \(String(describing: finalColorSpace))")
                 logger.debug("Apple Log disabled successfully")
             }
         } catch {
@@ -602,7 +622,7 @@ actor CaptureService {
     }
     
     /// Merge the `captureActivity` values of the photo and movie capture services,
-    /// and assign the value to the actor's property.`
+    /// and assign the value to the actor's property.
     private func observeOutputServices() {
         Publishers.Merge(photoCapture.$captureActivity, movieCapture.$captureActivity)
             .assign(to: &$captureActivity)

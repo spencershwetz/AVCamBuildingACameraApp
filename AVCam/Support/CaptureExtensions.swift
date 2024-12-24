@@ -112,5 +112,17 @@ extension AVCaptureDevice.Format {
     var maxFrameRate: Double {
         videoSupportedFrameRateRanges.last?.maxFrameRate ?? 0
     }
+    
+    var appleLogColorSpace: AVCaptureColorSpace {
+        .appleLog
+    }
+    
+    var sRGBColorSpace: AVCaptureColorSpace {
+        .sRGB
+    }
+    
+    func supportsColorSpace(_ colorSpace: AVCaptureColorSpace) -> Bool {
+        supportedColorSpaces.contains(colorSpace)
+    }
 }
 
