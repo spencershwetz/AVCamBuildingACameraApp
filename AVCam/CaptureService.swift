@@ -494,28 +494,33 @@ actor CaptureService {
     
     /// Sets whether the app captures HDR video.
     func setHDRVideoEnabled(_ isEnabled: Bool) {
-        // Bracket the following configuration in a begin/commit configuration pair.
+        logger.debug("Attempting to \(isEnabled ? "enable" : "disable") HDR video")
+        logger.debug("Current device: \(self.currentDevice.localizedName), format: \(self.currentDevice.activeFormat.description)")
+        
         captureSession.beginConfiguration()
         defer { captureSession.commitConfiguration() }
         do {
-            // If the current device provides a 10-bit HDR format, enable it for use.
             if isEnabled, let format = currentDevice.activeFormat10BitVariant {
+                logger.debug("Found HDR format: \(format.description)")
+                
                 try currentDevice.lockForConfiguration()
                 currentDevice.activeFormat = format
                 currentDevice.unlockForConfiguration()
                 isHDRVideoEnabled = true
+                logger.debug("Successfully enabled HDR video")
             } else {
+                logger.debug("\(isEnabled ? "No HDR format available" : "Disabling HDR") - resetting to high preset")
                 captureSession.sessionPreset = .high
                 isHDRVideoEnabled = false
+                logger.debug("HDR video disabled")
             }
         } catch {
-            logger.error("Unable to obtain lock on device and can't enable HDR video capture.")
+            logger.error("Unable to obtain lock on device and can't enable HDR video capture: \(error)")
         }
     }
     
     /// Sets whether the app captures Apple Log.
     func setAppleLogEnabled(_ isEnabled: Bool) async {
-        // Add pre-check debug logs
         logger.debug("Attempting to \(isEnabled ? "enable" : "disable") Apple Log")
         logger.debug("Current device: \(self.currentDevice.localizedName), format: \(self.currentDevice.activeFormat.description)")
 
@@ -531,23 +536,19 @@ actor CaptureService {
                 try self.currentDevice.lockForConfiguration()
                 defer { self.currentDevice.unlockForConfiguration() }
 
-                // Step 1: Disable HDR and reset format
-                isHDRVideoEnabled = false
                 captureSession.sessionPreset = .high
+                isHDRVideoEnabled = false
                 logger.debug("Reset format and disabled HDR")
 
-                // Step 2: Set the format that supports Apple Log
                 self.currentDevice.activeFormat = format
                 try await Task.sleep(for: .milliseconds(100))
                 logger.debug("Set active format to: \(self.currentDevice.activeFormat.description)")
 
-                // Step 3: Verify and set color space
                 if format.supportsColorSpace(.appleLog) {
                     let previousColorSpace = self.currentDevice.activeColorSpace
                     self.currentDevice.activeColorSpace = format.appleLogColorSpace
                     logger.debug("Color space transition: \(String(describing: previousColorSpace)) -> \(String(describing: self.currentDevice.activeColorSpace))")
 
-                    // Verify the change
                     if self.currentDevice.activeColorSpace == format.appleLogColorSpace {
                         isAppleLogEnabled = true
                         logger.debug("Successfully enabled Apple Log")
@@ -560,7 +561,6 @@ actor CaptureService {
                     isAppleLogEnabled = false
                 }
             } else {
-                // Disable Apple Log
                 logger.debug("Disabling Apple Log - Current format: \(self.currentDevice.activeFormat.description)")
 
                 try self.currentDevice.lockForConfiguration()
@@ -592,7 +592,6 @@ actor CaptureService {
         case .photo:
             captureCapabilities = photoCapture.capabilities
         case .video:
-            // Update to include Apple Log support check
             let isAppleLogSupported = currentDevice.activeFormatAppleLogVariant != nil
             captureCapabilities = CaptureCapabilities(
                 isHDRSupported: currentDevice.activeFormat10BitVariant != nil,
