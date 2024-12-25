@@ -3,7 +3,7 @@
 //  AVCam
 //
 //  Created by Apple on 7/19/23.
-//  Copyright © 2023 Apple Inc.
+//  Copyright 2023 Apple Inc.
 //  See the LICENSE.txt file for this sample’s licensing information.
 //
 //  Abstract:
@@ -515,90 +515,70 @@ actor CaptureService {
     
     /// Sets whether the app captures Apple Log.
     func setAppleLogEnabled(_ isEnabled: Bool) async {
+        // Add pre-check debug logs
+        logger.debug("Attempting to \(isEnabled ? "enable" : "disable") Apple Log")
+        logger.debug("Current device: \(self.currentDevice.localizedName), format: \(self.currentDevice.activeFormat.description)")
+
+        logger.debug("Available color spaces: \(self.currentDevice.activeFormat.supportedColorSpaces.map { String(describing: $0) })")
+
         captureSession.beginConfiguration()
         defer { captureSession.commitConfiguration() }
-        
+
         do {
-            if isEnabled, let format = currentDevice.activeFormatAppleLogVariant {
-                logger.debug("Attempting to enable Apple Log")
-                logger.debug("Selected format: \(format.formatDescription.dimensions.width)x\(format.formatDescription.dimensions.height)")
-                
-                // Directly log the current color space (no 'if let' needed, it's not optional).
-                logger.debug("Current color space before change: \(String(describing: self.currentDevice.activeColorSpace))")
-                
-                try currentDevice.lockForConfiguration()
-                defer { currentDevice.unlockForConfiguration() }
-                
-                // First set the format
-                currentDevice.activeFormat = format
-                logger.debug("Set active format successfully")
-                
-                // Force a brief delay to ensure format change is complete
+            if isEnabled, let format = self.currentDevice.activeFormatAppleLogVariant {
+                logger.debug("Found Apple Log format: \(format.description)")
+
+                try self.currentDevice.lockForConfiguration()
+                defer { self.currentDevice.unlockForConfiguration() }
+
+                // Step 1: Disable HDR and reset format
+                isHDRVideoEnabled = false
+                captureSession.sessionPreset = .high
+                logger.debug("Reset format and disabled HDR")
+
+                // Step 2: Set the format that supports Apple Log
+                self.currentDevice.activeFormat = format
                 try await Task.sleep(for: .milliseconds(100))
-                
-                // Explicitly set to Apple Log color space and verify
+                logger.debug("Set active format to: \(self.currentDevice.activeFormat.description)")
+
+                // Step 3: Verify and set color space
                 if format.supportsColorSpace(.appleLog) {
-                    // First disable HDR if it's enabled
-                    isHDRVideoEnabled = false
-                    
-                    // Reset format and color space
-                    captureSession.sessionPreset = .high
-                    if format.supportsColorSpace(.sRGB) {
-                        currentDevice.activeColorSpace = format.sRGBColorSpace
-                    }
-                    try await Task.sleep(for: .milliseconds(50))
-                    
-                    // Set format again and then Apple Log
-                    currentDevice.activeFormat = format
-                    try await Task.sleep(for: .milliseconds(50))
-                    
-                    // Now set to Apple Log
-                    currentDevice.activeColorSpace = format.appleLogColorSpace
-                    try await Task.sleep(for: .milliseconds(50))
-                    
-                    // Verify the color space was set correctly
-                    let activeColorSpace = currentDevice.activeColorSpace
-                    if activeColorSpace == format.appleLogColorSpace {
-                        logger.debug("Successfully set and verified Apple Log color space")
+                    let previousColorSpace = self.currentDevice.activeColorSpace
+                    self.currentDevice.activeColorSpace = format.appleLogColorSpace
+                    logger.debug("Color space transition: \(String(describing: previousColorSpace)) -> \(String(describing: self.currentDevice.activeColorSpace))")
+
+                    // Verify the change
+                    if self.currentDevice.activeColorSpace == format.appleLogColorSpace {
                         isAppleLogEnabled = true
+                        logger.debug("Successfully enabled Apple Log")
                     } else {
-                        logger.error("Failed to set Apple Log: Active color space is \(String(describing: activeColorSpace))")
+                        logger.error("Failed to set Apple Log color space. Current: \(String(describing: self.currentDevice.activeColorSpace))")
                         isAppleLogEnabled = false
                     }
                 } else {
-                    logger.error("Selected format does not support Apple Log color space")
+                    logger.error("Format does not support Apple Log: \(format.description)")
                     isAppleLogEnabled = false
                 }
-                
-                // Final verification
-                let finalColorSpace = currentDevice.activeColorSpace
-                logger.debug("Final active color space: \(String(describing: finalColorSpace))")
-                logger.debug("Final active format supports: \(Array(self.currentDevice.activeFormat.supportedColorSpaces).map { String(describing: $0) })")
-                
             } else {
-                logger.debug("Disabling Apple Log")
-                logger.debug("Current color space before disable: \(String(describing: self.currentDevice.activeColorSpace))")
-                
-                try currentDevice.lockForConfiguration()
-                defer { currentDevice.unlockForConfiguration() }
-                
-                // Reset everything
+                // Disable Apple Log
+                logger.debug("Disabling Apple Log - Current format: \(self.currentDevice.activeFormat.description)")
+
+                try self.currentDevice.lockForConfiguration()
+                defer { self.currentDevice.unlockForConfiguration() }
+
                 captureSession.sessionPreset = .high
-                if currentDevice.activeFormat.supportsColorSpace(.sRGB) {
-                    currentDevice.activeColorSpace = currentDevice.activeFormat.sRGBColorSpace
-                }
-                isAppleLogEnabled = false
+                let sRGBColorSpace = self.currentDevice.activeFormat.sRGBColorSpace
+                self.currentDevice.activeColorSpace = sRGBColorSpace
+                logger.debug("Reset to sRGB color space")
                 
-                let finalColorSpace = currentDevice.activeColorSpace
-                logger.debug("Final color space after disable: \(String(describing: finalColorSpace))")
-                logger.debug("Apple Log disabled successfully")
+                isAppleLogEnabled = false
             }
         } catch {
-            logger.error("Failed to configure Apple Log: \(error.localizedDescription)")
+            logger.error("Apple Log configuration failed: \(error)")
+            isAppleLogEnabled = false
         }
     }
     
-    // MARK: - Internal state management
     /// Updates the state of the actor to ensure its advertised capabilities are accurate.
     ///
     /// When the capture session changes, such as changing modes or input devices, the service
