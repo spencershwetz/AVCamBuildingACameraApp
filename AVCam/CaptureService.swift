@@ -122,6 +122,9 @@ actor CaptureService {
         // Return early if already set up.
         guard !isSetUp else { return }
 
+        // Disable automatic wide color configuration to manually set color space.
+        captureSession.automaticallyConfiguresCaptureDeviceForWideColor = false
+
         // Observe internal state and notifications.
         observeOutputServices()
         observeNotifications()
@@ -134,6 +137,7 @@ actor CaptureService {
 
             // Add inputs for the default camera and microphone devices.
             activeVideoInput = try addInput(for: defaultCamera)
+            defaultFormat = currentDevice.activeFormat
             try addInput(for: defaultMic)
 
             // Configure the session preset based on the current capture mode.
@@ -192,7 +196,9 @@ actor CaptureService {
         }
         return device
     }
-    
+
+    var defaultFormat: AVCaptureDevice.Format?
+
     // MARK: - Capture controls
     
     private func configureControls(for device: AVCaptureDevice) {
@@ -332,6 +338,8 @@ actor CaptureService {
         do {
             // Attempt to connect a new input and device to the capture session.
             activeVideoInput = try addInput(for: device)
+            defaultFormat = currentDevice.activeFormat
+
             // Configure capture controls for new device selection.
             configureControls(for: device)
             // Configure a new rotation coordinator for the new device.
@@ -518,7 +526,53 @@ actor CaptureService {
             logger.error("Unable to obtain lock on device and can't enable HDR video capture: \(error)")
         }
     }
-    
+
+    // MARK: - Apple Log
+
+    private func isAppleLogAvailable(for device: AVCaptureDevice) -> Bool {
+        device.formats.first(where: {
+            $0.supportedColorSpaces.contains(.appleLog)
+        }) != nil
+    }
+
+    func configureAppleLog() throws {
+        logger.info("Starting Apple Log configuration in \(#function)")
+        guard isAppleLogAvailable(for: currentDevice) else {
+            logger.log("\(#function) device \(self.currentDevice.description) is not available .appleLog")
+            return
+        }
+
+        try currentDevice.lockForConfiguration()
+        defer {
+            currentDevice.unlockForConfiguration()
+        }
+
+        /// set up for .appleLog
+        if let format = currentDevice.formats.first(where: {
+            $0.supportedColorSpaces.contains(.appleLog)
+        }) {
+            currentDevice.activeFormat = format
+            currentDevice.activeColorSpace = .appleLog
+        }
+
+        /// configure frame rate
+        let frameRate = CMTimeMake(value: 1, timescale: 30)
+        currentDevice.activeVideoMinFrameDuration = frameRate
+        currentDevice.activeVideoMaxFrameDuration = frameRate
+    }
+
+    func resetAppleLog() throws {
+        logger.info("Resetting Apple Log configuration in \(#function)")
+        try currentDevice.lockForConfiguration()
+        defer {
+            currentDevice.unlockForConfiguration()
+        }
+        if let defaultFormat {
+            currentDevice.activeFormat = defaultFormat
+        }
+        currentDevice.activeColorSpace = .sRGB
+    }
+
     /// Sets whether the app captures Apple Log.
     func setAppleLogEnabled(_ isEnabled: Bool) async {
         logger.debug("Attempting to \(isEnabled ? "enable" : "disable") Apple Log")

@@ -62,10 +62,22 @@ final class CameraModel: Camera {
     var isAppleLogEnabled = false {
         didSet {
             guard status == .running, captureMode == .video else { return }
-            Task {
+            Task { @MainActor in
+                /*
                 await captureService.setAppleLogEnabled(isAppleLogEnabled)
                 // Update the persistent state value
                 cameraState.isAppleLogEnabled = isAppleLogEnabled
+                 */
+                do {
+                    if isAppleLogEnabled {
+                        try await captureService.configureAppleLog()
+                    } else {
+                        try await captureService.resetAppleLog()
+                    }
+                    cameraState.isAppleLogEnabled = isAppleLogEnabled
+                } catch {
+                    logger.error("Failed to configure Apple Log: \(error.localizedDescription)")
+                }
             }
         }
     }
