@@ -109,8 +109,18 @@ extension AVCaptureDevice.Format {
         return hasAppleLog && hasBT2020 // Need both for proper Apple Log support
     }
     
+    var film24FPS: CMTime {
+        CMTimeMake(value: 1001, timescale: 24000)
+    }
+    
     var maxFrameRate: Double {
         videoSupportedFrameRateRanges.last?.maxFrameRate ?? 0
+    }
+    
+    func supports24FPS() -> Bool {
+        videoSupportedFrameRateRanges.contains { range in
+            range.minFrameRate <= 23.976 && range.maxFrameRate >= 23.976
+        }
     }
     
     var appleLogColorSpace: AVCaptureColorSpace {

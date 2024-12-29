@@ -326,31 +326,53 @@ actor CaptureService {
     
     // Changes the device the service uses for video capture.
     private func changeCaptureDevice(to device: AVCaptureDevice) {
-        // The service must have a valid video input prior to calling this method.
         guard let currentInput = activeVideoInput else { fatalError() }
         
-        // Bracket the following configuration in a begin/commit configuration pair.
         captureSession.beginConfiguration()
         defer { captureSession.commitConfiguration() }
         
-        // Remove the existing video input before attempting to connect a new one.
         captureSession.removeInput(currentInput)
         do {
-            // Attempt to connect a new input and device to the capture session.
             activeVideoInput = try addInput(for: device)
-            defaultFormat = currentDevice.activeFormat
-
-            // Configure capture controls for new device selection.
-            configureControls(for: device)
-            // Configure a new rotation coordinator for the new device.
+            
+            // Set frame rate first, before any other configuration
+            try device.lockForConfiguration()
+            defer { device.unlockForConfiguration() }
+            
+            // Find a format that supports our desired frame rate
+            if let format = device.formats.first(where: { format in
+                format.videoSupportedFrameRateRanges.contains { range in
+                    range.minFrameRate <= 23.976 && range.maxFrameRate >= 23.976
+                }
+            }) {
+                // Set format first
+                device.activeFormat = format
+                defaultFormat = format
+                
+                // Create exact timing for 23.976 fps (24000/1001)
+                let desiredFrameRate = CMTimeMake(value: 1001, timescale: 24000)
+                
+                // Lock the frame rate by setting both min and max
+                device.activeVideoMinFrameDuration = desiredFrameRate
+                device.activeVideoMaxFrameDuration = desiredFrameRate
+                
+                // Force session preset after frame rate change
+                captureSession.sessionPreset = .high
+                
+                logger.debug("Set frame rate to 23.976 fps")
+                logger.debug("Format: \(format.formatDescription.dimensions.width)x\(format.formatDescription.dimensions.height)")
+                logger.debug("Frame duration: \(desiredFrameRate.seconds * 1000) ms")
+                logger.debug("Actual frame rate: \(1.0 / device.activeVideoMinFrameDuration.seconds)")
+            } else {
+                logger.error("No format found supporting 23.976 fps")
+            }
+            
             createRotationCoordinator(for: device)
-            // Register for device observations.
             observeSubjectAreaChanges(of: device)
-            // Update the service's advertised capabilities.
             updateCaptureCapabilities()
         } catch {
-            // Reconnect the existing camera on failure.
             captureSession.addInput(currentInput)
+            logger.error("Failed to change capture device: \(error)")
         }
     }
     
@@ -516,11 +538,13 @@ actor CaptureService {
                 currentDevice.unlockForConfiguration()
                 isHDRVideoEnabled = true
                 logger.debug("Successfully enabled HDR video")
+                forceFrameRateUpdate()
             } else {
                 logger.debug("\(isEnabled ? "No HDR format available" : "Disabling HDR") - resetting to high preset")
                 captureSession.sessionPreset = .high
                 isHDRVideoEnabled = false
                 logger.debug("HDR video disabled")
+                forceFrameRateUpdate()
             }
         } catch {
             logger.error("Unable to obtain lock on device and can't enable HDR video capture: \(error)")
@@ -531,13 +555,13 @@ actor CaptureService {
 
     private func isAppleLogAvailable(for device: AVCaptureDevice) -> Bool {
         device.formats.first(where: {
-            $0.supportedColorSpaces.contains(.appleLog)
+            $0.supportedColorSpaces.contains(AVCaptureColorSpace.appleLog)
         }) != nil
     }
 
     func configureAppleLog() throws {
         logger.info("Starting Apple Log configuration in \(#function)")
-        guard isAppleLogAvailable(for: currentDevice) else {
+        guard isAppleLogAvailable(for: self.currentDevice) else {
             logger.log("\(#function) device \(self.currentDevice.description) is not available .appleLog")
             return
         }
@@ -548,17 +572,20 @@ actor CaptureService {
         }
 
         /// set up for .appleLog
-        if let format = currentDevice.formats.first(where: {
-            $0.supportedColorSpaces.contains(.appleLog)
+        if let format = self.currentDevice.formats.first(where: {
+            $0.supportedColorSpaces.contains(AVCaptureColorSpace.appleLog)
         }) {
             currentDevice.activeFormat = format
             currentDevice.activeColorSpace = .appleLog
         }
 
-        /// configure frame rate
-        let frameRate = CMTimeMake(value: 1, timescale: 30)
+        // Configure frame rate for 23.976 fps instead of 30
+        let frameRate = CMTimeMake(value: 1001, timescale: 24000)
         currentDevice.activeVideoMinFrameDuration = frameRate
         currentDevice.activeVideoMaxFrameDuration = frameRate
+        
+        logger.debug("Set Apple Log frame rate to 23.976 fps")
+        logger.debug("Actual frame rate: \(1.0 / self.currentDevice.activeVideoMinFrameDuration.seconds)")
     }
 
     func resetAppleLog() throws {
@@ -614,6 +641,7 @@ actor CaptureService {
                     logger.error("Format does not support Apple Log: \(format.description)")
                     isAppleLogEnabled = false
                 }
+                forceFrameRateUpdate()
             } else {
                 logger.debug("Disabling Apple Log - Current format: \(self.currentDevice.activeFormat.description)")
 
@@ -626,6 +654,7 @@ actor CaptureService {
                 logger.debug("Reset to sRGB color space")
                 
                 isAppleLogEnabled = false
+                forceFrameRateUpdate()
             }
         } catch {
             logger.error("Apple Log configuration failed: \(error)")
@@ -695,6 +724,27 @@ actor CaptureService {
                     }
                 }
             }
+        }
+    }
+
+    // Add this method to force frame rate update when needed
+    private func forceFrameRateUpdate() {
+        do {
+            try self.currentDevice.lockForConfiguration()
+            defer { self.currentDevice.unlockForConfiguration() }
+            
+            // Set exact 23.976 fps timing
+            let desiredFrameRate = CMTimeMake(value: 1001, timescale: 24000)
+            
+            // Lock the frame rate
+            self.currentDevice.activeVideoMinFrameDuration = desiredFrameRate
+            self.currentDevice.activeVideoMaxFrameDuration = desiredFrameRate
+            
+            logger.debug("Forced frame rate update")
+            logger.debug("Target frame rate: 23.976 fps")
+            logger.debug("Actual frame rate: \(1.0 / self.currentDevice.activeVideoMinFrameDuration.seconds)")
+        } catch {
+            logger.error("Failed to update frame rate: \(error)")
         }
     }
 }

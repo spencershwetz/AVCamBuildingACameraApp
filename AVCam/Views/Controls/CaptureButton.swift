@@ -1,0 +1,1 @@
+// Modify to only handle video recording (remove photo capture functionality) 

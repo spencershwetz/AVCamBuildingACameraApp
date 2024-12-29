@@ -41,9 +41,18 @@ final class MovieCapture: OutputService {
             fatalError("Configuration error. No video connection found.")
         }
 
-        // Configure connection for HEVC capture.
+        // Configure connection for HEVC capture
         if movieOutput.availableVideoCodecTypes.contains(.hevc) {
-            movieOutput.setOutputSettings([AVVideoCodecKey: AVVideoCodecType.hevc], for: connection)
+            let compressionProperties: [String: Any] = [
+                AVVideoAverageBitRateKey: 10_000_000, // 10 Mbps
+                AVVideoMaxKeyFrameIntervalKey: 24,     // Keyframe every 24 frames
+                AVVideoProfileLevelKey: AVVideoProfileLevelH264High40
+            ]
+            
+            movieOutput.setOutputSettings([
+                AVVideoCodecKey: AVVideoCodecType.hevc,
+                AVVideoCompressionPropertiesKey: compressionProperties
+            ], for: connection)
         }
 
         // Enable video stabilization if the connection supports it.
@@ -51,9 +60,7 @@ final class MovieCapture: OutputService {
             connection.preferredVideoStabilizationMode = .auto
         }
         
-        // Start a timer to update the recording time.
         startMonitoringDuration()
-        
         delegate = MovieCaptureDelegate()
         movieOutput.startRecording(to: URL.movieFileURL, recordingDelegate: delegate!)
     }
